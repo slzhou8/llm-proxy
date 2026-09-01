@@ -1,0 +1,40 @@
+{
+  "admin_addr": "127.0.0.1:18081",
+  "proxy_addr": ":18080",
+  "stats_file": "stats.json",
+  "log_buffer": 200,
+  "jwt_secret": "",
+  "admin": {
+    "username": "admin",
+    "password_hash": ""
+  },
+  "users": [
+    {
+      "username": "admin",
+      "password_hash": "",
+      "role": "admin"
+    }
+  ],
+  "retry": {
+    "max_attempts": 3,
+    "base_delay_ms": 500,
+    "max_delay_ms": 10000,
+    "retry_on_429": true,
+    "retry_on_5xx": true,
+    "retry_on_timeout": true,
+    "total_timeout_sec": 120
+  },
+  "failover": {
+    "mode": "round_robin",
+    "skip_unhealthy": true,
+    "max_rotations": 0
+  },
+  "alert": {
+    "url": "",
+    "enabled": false,
+    "fail_streak": 3,
+    "cooldown_sec": 600
+  },
+  "upstreams": [],
+  "client_keys": []
+}

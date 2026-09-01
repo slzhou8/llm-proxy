@@ -1,0 +1,19 @@
+# build output
+llmproxy.exe
+llmproxy
+*.exe
+
+# runtime data (generated)
+config.json
+config.json.bak
+stats.json
+usage.db
+*.db
+
+# logs
+*.log
+mock.out
+mock.err
+
+# local workspace memory (NEVER publish — contains tokens, IPs, SSH context)
+.workbuddy/

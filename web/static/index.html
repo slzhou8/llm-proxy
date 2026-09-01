@@ -1,0 +1,2577 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LLM Proxy</title>
+<style>
+/* ============ Design tokens ============ */
+:root{
+  --bg:#f4f5f9;
+  --bg-grad:radial-gradient(1200px 600px at 80% -10%,rgba(99,102,241,.08),transparent 60%),
+            radial-gradient(900px 500px at -10% 0%,rgba(56,189,248,.07),transparent 55%);
+  --panel:#ffffff;
+  --panel-2:#fafbfd;
+  --border:#e6e8f0;
+  --border-strong:#d6d9e4;
+  --text:#181c26;
+  --text-2:#3d4354;
+  --dim:#7a8199;
+  --accent:#6366f1;
+  --accent-hover:#4f46e5;
+  --accent-soft:#eef0fe;
+  --accent-fg:#4f46e5;
+  --ok:#10b981;--ok-soft:#e7f8f1;
+  --warn:#d97706;--warn-soft:#fdf3e3;
+  --err:#ef4444;--err-soft:#fdecec;
+  --info:#3b82f6;--info-soft:#eaf1fe;
+  --input-bg:#ffffff;
+  --tag-openai-bg:#eef0fe;--tag-openai-fg:#4f46e5;
+  --tag-anthropic-bg:#fdf3e3;--tag-anthropic-fg:#b45309;
+  --tag-on-bg:#e7f8f1;--tag-on-fg:#059669;
+  --tag-off-bg:#fdecec;--tag-off-fg:#dc2626;
+  --code-bg:#f1f2f8;
+  --tooltip-bg:#1d2230;--tooltip-fg:#eef1f8;
+  --ring:rgba(99,102,241,.16);
+  --shadow-sm:0 1px 2px rgba(24,28,38,.04),0 1px 3px rgba(24,28,38,.05);
+  --shadow-md:0 4px 12px -2px rgba(24,28,38,.08),0 2px 4px -1px rgba(24,28,38,.04);
+  --shadow-lg:0 12px 32px -8px rgba(24,28,38,.14);
+  --r-sm:8px;--r-md:12px;--r-lg:16px;
+  /* ---- typography scale (single source of truth) ---- */
+  --fs-2xs:10.5px;--fs-xs:11px;--fs-sm:12px;--fs-base:13px;
+  --fs-md:13.5px;--fs-lg:15px;--fs-xl:17px;--fs-2xl:20px;--fs-3xl:24px;
+  --lh-tight:1.3;--lh-base:1.5;
+  --fw-med:500;--fw-semi:600;--fw-bold:700;
+  /* ---- spacing scale ---- */
+  --sp-1:4px;--sp-2:8px;--sp-3:12px;--sp-4:16px;--sp-5:20px;--sp-6:24px;--sp-8:32px;
+  --header-bg:rgba(255,255,255,.82);
+  --sidebar-bg:transparent;
+  --chart-bar:var(--accent);
+}
+[data-theme="dark"]{
+  --bg:#0d0f14;
+  --bg-grad:radial-gradient(1200px 600px at 80% -10%,rgba(99,102,241,.14),transparent 60%),
+            radial-gradient(900px 500px at -10% 0%,rgba(56,189,248,.09),transparent 55%);
+  --panel:#151822;
+  --panel-2:#1a1e2a;
+  --border:#262b3a;
+  --border-strong:#343a4e;
+  --text:#e8eaf2;
+  --text-2:#b9bfd2;
+  --dim:#7e85a0;
+  --accent:#818cf8;
+  --accent-hover:#a5b0ff;
+  --accent-soft:#232741;
+  --accent-fg:#a5b0ff;
+  --ok:#34d399;--ok-soft:#0f2b21;
+  --warn:#fbbf24;--warn-soft:#2e2310;
+  --err:#f87171;--err-soft:#331616;
+  --info:#60a5fa;--info-soft:#15233b;
+  --input-bg:#0f1219;
+  --tag-openai-bg:#232741;--tag-openai-fg:#a5b0ff;
+  --tag-anthropic-bg:#2e2310;--tag-anthropic-fg:#fbbf24;
+  --tag-on-bg:#0f2b21;--tag-on-fg:#34d399;
+  --tag-off-bg:#331616;--tag-off-fg:#f87171;
+  --code-bg:#1c2030;
+  --tooltip-bg:#1d2230;--tooltip-fg:#eef1f8;
+  --ring:rgba(129,140,248,.22);
+  --shadow-sm:0 1px 2px rgba(0,0,0,.3);
+  --shadow-md:0 4px 12px -2px rgba(0,0,0,.4);
+  --shadow-lg:0 12px 32px -8px rgba(0,0,0,.5);
+  --header-bg:rgba(13,15,20,.78);
+}
+
+/* ============ Base ============ */
+*{box-sizing:border-box;}
+html{-webkit-font-smoothing:antialiased;}
+body{
+  margin:0;
+  font-family:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
+  background:var(--bg);
+  background-image:var(--bg-grad);
+  background-attachment:fixed;
+  color:var(--text);
+  font-size:14px;
+  overflow-x:hidden;
+  line-height:1.55;
+}
+::selection{background:var(--ring);}
+button{font-family:inherit;transition:all .16s ease;}
+input,select,textarea{
+  background:var(--input-bg);border:1px solid var(--border-strong);color:var(--text);
+  padding:9px 12px;border-radius:var(--r-sm);font-size:13px;width:100%;
+  transition:border-color .16s ease,box-shadow .16s ease;font-family:inherit;
+}
+input:focus,select:focus,textarea:focus{
+  outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--ring);
+}
+input::placeholder{color:var(--dim);}
+label{display:block;font-size:var(--fs-sm);font-weight:var(--fw-med);color:var(--dim);margin:12px 0 5px;}
+code{background:var(--code-bg);padding:2px 7px;border-radius:6px;font-size:12px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;}
+.hidden{display:none !important;}
+.mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px;}
+
+/* ============ Layout: sidebar + content ============ */
+#app{display:flex;min-height:100vh;}
+.sidebar{
+  width:216px;flex-shrink:0;padding:22px 14px;display:flex;flex-direction:column;gap:2px;
+  border-right:1px solid var(--border);position:sticky;top:0;height:100vh;
+  background:var(--sidebar-bg);
+}
+.brand{display:flex;align-items:center;gap:10px;padding:4px 10px 20px;}
+.brand-logo{
+  width:34px;height:34px;border-radius:10px;display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(135deg,#6366f1,#8b5cf6 60%,#38bdf8);
+  color:#fff;font-size:16px;font-weight:700;box-shadow:0 4px 10px -2px rgba(99,102,241,.5);
+}
+.brand-name{font-size:var(--fs-lg);font-weight:var(--fw-bold);letter-spacing:.2px;}
+.brand-sub{font-size:var(--fs-2xs);color:var(--dim);font-weight:400;margin-top:1px;}
+.nav-item{
+  display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:10px;border:none;
+  background:none;color:var(--text-2);cursor:pointer;font-size:var(--fs-md);font-weight:var(--fw-med);
+  text-align:left;width:100%;
+}
+.nav-item:hover{background:var(--accent-soft);color:var(--accent-fg);}
+.nav-item.active{background:var(--accent-soft);color:var(--accent-fg);font-weight:600;}
+.nav-item .ico{font-size:15px;width:20px;text-align:center;display:inline-flex;align-items:center;justify-content:center;}
+.ico svg{width:16px;height:16px;display:block;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;}
+.sidebar-foot{margin-top:auto;display:flex;flex-direction:column;gap:2px;border-top:1px solid var(--border);padding-top:12px;}
+
+/* Mobile top bar + drawer backdrop (hidden on desktop) */
+.mtop{display:none;align-items:center;gap:12px;height:52px;flex-shrink:0;padding:0 12px;border-bottom:1px solid var(--border);background:var(--sidebar-bg);position:sticky;top:0;z-index:70;}
+.mtop-btn{display:inline-flex;align-items:center;justify-content:center;width:38px;height:38px;border-radius:9px;border:none;background:var(--panel-2);color:var(--text);cursor:pointer;}
+.mtop-btn .ico{width:20px;height:20px;}
+.mtop-brand{font-size:var(--fs-md);font-weight:var(--fw-bold);}
+.sidebar-backdrop{display:none;position:fixed;inset:0;background:rgba(15,18,30,.45);z-index:80;}
+body.no-scroll{overflow:hidden;}
+
+main{flex:1;padding:28px 32px 48px;max-width:1240px;min-width:0;}
+.page-head{margin-bottom:var(--sp-5);}
+.page-title{font-size:var(--fs-2xl);font-weight:var(--fw-bold);margin:0;letter-spacing:-.01em;}
+.page-desc{color:var(--dim);font-size:var(--fs-base);margin:4px 0 0;}
+
+/* ============ Cards ============ */
+.card{
+  background:var(--panel);border:1px solid var(--border);border-radius:var(--r-lg);
+  padding:22px;margin-bottom:20px;box-shadow:var(--shadow-sm);
+  transition:box-shadow .2s ease;
+}
+.card h2{
+  font-size:var(--fs-base);margin:0 0 16px;color:var(--text-2);font-weight:var(--fw-semi);
+  display:flex;align-items:center;gap:8px;
+}
+.card h2::before{
+  content:"";width:3px;height:14px;border-radius:2px;
+  background:linear-gradient(180deg,var(--accent),#38bdf8);flex-shrink:0;
+}
+.card-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;}
+.card-head h2{margin:0;}
+
+/* ============ Tables ============ */
+.overflow{overflow-x:auto;margin:0 -6px;padding:0 6px;}
+table{width:100%;border-collapse:collapse;font-size:var(--fs-base);}
+th{
+  text-align:left;padding:10px 12px;color:var(--dim);font-weight:var(--fw-semi);font-size:var(--fs-xs);
+  text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--border);
+  white-space:nowrap;background:var(--panel-2);
+}
+thead tr th:first-child{border-radius:8px 0 0 8px;}
+thead tr th:last-child{border-radius:0 8px 8px 0;}
+td{padding:11px 12px;border-bottom:1px solid var(--border);vertical-align:middle;}
+tbody tr{transition:background .12s ease;}
+tbody tr:hover{background:var(--panel-2);}
+tbody tr:last-child td{border-bottom:none;}
+
+/* ============ Tags / badges ============ */
+.tag{
+  display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:999px;
+  font-size:11px;font-weight:600;letter-spacing:.02em;white-space:nowrap;
+}
+.tag::before{content:"";width:5px;height:5px;border-radius:50%;background:currentColor;}
+.tag.openai{background:var(--tag-openai-bg);color:var(--tag-openai-fg);}
+.tag.anthropic{background:var(--tag-anthropic-bg);color:var(--tag-anthropic-fg);}
+.tag.on{background:var(--tag-on-bg);color:var(--tag-on-fg);}
+.tag.off{background:var(--tag-off-bg);color:var(--tag-off-fg);}
+.tag.plain::before{display:none;}
+
+/* ============ Buttons ============ */
+.btn{
+  background:var(--accent);border:1px solid transparent;color:#fff;padding:8px 16px;
+  border-radius:var(--r-sm);cursor:pointer;font-size:13px;font-weight:500;
+  box-shadow:0 1px 2px rgba(99,102,241,.3);
+}
+.btn:hover{background:var(--accent-hover);transform:translateY(-1px);box-shadow:var(--shadow-md);}
+.btn:active{transform:translateY(0);}
+.btn.ghost{
+  background:var(--panel);border:1px solid var(--border-strong);color:var(--text-2);
+  box-shadow:var(--shadow-sm);
+}
+.btn.ghost:hover{border-color:var(--accent);color:var(--accent-fg);background:var(--accent-soft);}
+.btn.ghost.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent-fg);font-weight:600;}
+.btn.danger{background:var(--err-soft);color:var(--err);border:1px solid transparent;box-shadow:none;}
+.btn.danger:hover{background:var(--err);color:#fff;}
+.btn.sm{padding:4px 10px;font-size:12px;border-radius:7px;}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+.keybtn{padding:2px 9px;font-size:11px;margin-left:4px;}
+
+/* ============ Forms / grids ============ */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:4px 16px;}
+.form-block{background:var(--panel-2);border:1px dashed var(--border-strong);border-radius:var(--r-md);padding:16px 18px;margin-top:16px;}
+.form-block-title{font-size:12px;font-weight:600;color:var(--dim);margin-bottom:2px;text-transform:uppercase;letter-spacing:.05em;}
+
+/* ============ Stats ============ */
+/* Fixed 3 columns: the stats page KPI row always renders exactly 9 cards, so
+   3x3 divides evenly instead of auto-fill's width-dependent 4+4+1 wrap. */
+.stat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;}
+/* 9 cards divide evenly only by 3 and by 1, so there is no useful 2-column
+   step -- it just reintroduces a dangling card (2+2+2+2+1). Hold 3 columns
+   until they get too narrow, then go straight to one per row. */
+@media(max-width:560px){.stat-grid{grid-template-columns:1fr;}}
+.stat{
+  background:var(--panel-2);border:1px solid var(--border);border-radius:var(--r-md);
+  padding:16px 18px;display:flex;flex-direction:column;gap:6px;position:relative;overflow:hidden;
+  transition:transform .16s ease,box-shadow .16s ease;
+}
+.stat:hover{transform:translateY(-2px);box-shadow:var(--shadow-md);}
+.stat b{font-size:var(--fs-3xl);font-weight:var(--fw-bold);letter-spacing:-.02em;font-variant-numeric:tabular-nums;}
+.stat span{color:var(--dim);font-size:var(--fs-sm);font-weight:var(--fw-med);}
+
+/* ============ Overview dashboard ============ */
+.ov-updated{color:var(--dim);font-size:12px;}
+.ov-kpi{display:grid;grid-template-columns:repeat(4,1fr);gap:var(--sp-4);margin-bottom:var(--sp-5);}
+.ov-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:var(--sp-5);}
+.ov-grid .card{margin-bottom:0;}
+@media(max-width:920px){.ov-kpi{grid-template-columns:repeat(2,1fr);}.ov-grid{grid-template-columns:1fr;}}
+.ov-stat-sub{font-size:11.5px;color:var(--dim);margin-top:2px;font-variant-numeric:tabular-nums;}
+.ov-delta{font-size:11.5px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap;}
+.ov-delta.ov-muted,.ov-muted{color:var(--dim);font-weight:500;}
+.ov-health-top{display:flex;align-items:center;gap:16px;margin-bottom:14px;}
+.ov-ring{width:62px;height:62px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:var(--fs-xl);font-weight:var(--fw-bold);flex-shrink:0;border:3px solid var(--border);}
+.ov-ring.ok{border-color:var(--ok);color:var(--ok);}
+.ov-ring.warn{border-color:var(--warn);color:var(--warn);}
+.ov-ring.bad{border-color:var(--err);color:var(--err);}
+.ov-health-title{font-size:var(--fs-md);font-weight:var(--fw-semi);}
+.ov-health-sub{font-size:var(--fs-sm);color:var(--dim);margin-top:2px;}
+.ov-up-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);font-size:var(--fs-base);}
+.ov-up-row:last-child{border-bottom:none;}
+.ov-up-name{font-weight:500;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.ov-up-rate{font-weight:700;font-variant-numeric:tabular-nums;}
+.ov-up-err{color:var(--err);font-size:11.5px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.ov-usage-row{display:flex;align-items:center;gap:8px;padding:9px 0;border-bottom:1px solid var(--border);font-size:var(--fs-base);}
+.ov-usage-row:last-child{border-bottom:none;}
+.ov-usage-row>span:first-child{color:var(--dim);min-width:64px;}
+.ov-usage-row>b{margin-left:auto;font-variant-numeric:tabular-nums;font-size:var(--fs-lg);}
+.ov-usage-row .ov-delta{margin-left:12px;}
+.ov-insight{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;margin-bottom:8px;cursor:pointer;background:var(--panel-2);border:1px solid var(--border);border-left-width:3px;transition:border-color .12s ease,background .12s ease;}
+.ov-insight:hover{border-color:var(--accent);}
+.ov-insight.bad{border-left-color:var(--err);}
+.ov-insight.warn{border-left-color:var(--warn);}
+.ov-insight .ico{color:var(--err);flex-shrink:0;}
+.ov-insight.warn .ico{color:var(--warn);}
+.ov-insight>span:nth-child(2){flex:1;}
+.ov-insight-go{color:var(--dim);font-size:12px;white-space:nowrap;}
+.ov-empty{color:var(--dim);font-size:13px;text-align:center;padding:22px 0;}
+.ov-fail-tbl{font-size:12.5px;}
+.ov-fail-tbl th{padding:8px 10px;}
+.ov-fail-tbl td{padding:8px 10px;}
+.ov-err-cell{color:var(--err);max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+
+/* ============ Messages ============ */
+.msg{color:var(--ok);font-size:12.5px;margin-top:10px;font-weight:500;}
+.msg.err{color:var(--err);}
+
+/* ============ Login ============ */
+#login{
+  position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+  background:var(--bg);background-image:var(--bg-grad);
+}
+#login .box{
+  background:var(--panel);border:1px solid var(--border);border-radius:20px;
+  padding:40px 38px;width:360px;box-shadow:var(--shadow-lg);
+  animation:rise .35s cubic-bezier(.2,.8,.3,1);
+}
+@keyframes rise{from{opacity:0;transform:translateY(14px);}to{opacity:1;transform:none;}}
+#login .logo-lg{
+  width:48px;height:48px;border-radius:14px;display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(135deg,#6366f1,#8b5cf6 60%,#38bdf8);color:#fff;font-size:22px;font-weight:700;
+  margin-bottom:18px;box-shadow:0 6px 16px -4px rgba(99,102,241,.5);
+}
+#login h1{margin:0 0 4px;font-size:22px;font-weight:700;letter-spacing:-.01em;}
+#login p{margin:0 0 22px;color:var(--dim);font-size:13px;}
+
+/* ============ Modal ============ */
+.modal{
+  position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+  background:rgba(15,17,23,.45);backdrop-filter:blur(4px);z-index:50;
+  animation:fade .18s ease;
+}
+@keyframes fade{from{opacity:0;}to{opacity:1;}}
+.modal .box{
+  background:var(--panel);border:1px solid var(--border);border-radius:18px;
+  padding:28px;width:380px;box-shadow:var(--shadow-lg);
+  animation:rise .28s cubic-bezier(.2,.8,.3,1);
+}
+.modal h3{margin:0 0 18px;font-size:var(--fs-xl);font-weight:var(--fw-bold);}
+.shortcut-list{display:flex;flex-direction:column;gap:11px;}
+.sc-row{display:flex;align-items:center;gap:12px;}
+.sc-keys{display:flex;gap:4px;flex:0 0 auto;}
+.sc-keys kbd{
+  display:inline-block;min-width:22px;text-align:center;padding:2px 6px;
+  background:var(--panel-2);border:1px solid var(--border-strong);border-bottom-width:2px;
+  border-radius:6px;font-size:11.5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text-2);
+}
+.sc-desc{font-size:13px;color:var(--text-2);}
+
+/* ============ Range picker chips ============ */
+.chip{
+  background:var(--panel);border:1px solid var(--border-strong);color:var(--text-2);
+  padding:6px 14px;border-radius:999px;cursor:pointer;font-size:12.5px;font-weight:500;
+  box-shadow:var(--shadow-sm);
+}
+.chip:hover{border-color:var(--accent);color:var(--accent-fg);}
+.chip.on{background:var(--accent);border-color:var(--accent);color:#fff;box-shadow:0 2px 8px -1px rgba(99,102,241,.4);}
+.date-input{width:auto !important;padding:6px 10px;font-size:12.5px;}
+
+/* ============ Chart ============ */
+#trend-chart svg{display:block;}
+#trend-chart rect{transition:opacity .12s ease;}
+#trend-chart rect:hover{opacity:.82;}
+.chart-tip{
+  position:fixed;z-index:200;pointer-events:none;max-width:260px;
+  background:var(--tooltip-bg);color:var(--tooltip-fg);
+  border:1px solid var(--border);border-radius:10px;
+  padding:9px 11px;font-size:12px;line-height:1.5;
+  box-shadow:0 8px 24px rgba(0,0,0,.16);
+  transition:opacity .1s ease;
+}
+.chart-tip .ct-title{font-weight:600;margin-bottom:4px;}
+.chart-tip .ct-row{display:flex;justify-content:space-between;gap:14px;color:var(--tooltip-fg);}
+.chart-tip .ct-row .ct-k{color:var(--dim);}
+.chart-tip.hidden{opacity:0;visibility:hidden;}
+
+/* ============ Toast notifications ============ */
+#toasts{
+  position:fixed;bottom:24px;right:24px;z-index:100;display:flex;flex-direction:column;gap:10px;
+  pointer-events:none;max-width:360px;
+}
+.toast{
+  display:flex;align-items:flex-start;gap:10px;padding:12px 16px;border-radius:12px;
+  background:var(--panel);border:1px solid var(--border);box-shadow:var(--shadow-lg);
+  font-size:13px;color:var(--text);pointer-events:auto;
+  animation:toast-in .25s cubic-bezier(.2,.8,.3,1);
+  border-left:3px solid var(--toast-c,var(--accent));
+}
+.toast.out{animation:toast-out .2s ease forwards;}
+@keyframes toast-in{from{opacity:0;transform:translateX(24px);}to{opacity:1;transform:none;}}
+@keyframes toast-out{to{opacity:0;transform:translateX(24px);}}
+.toast .t-ico{flex-shrink:0;font-size:14px;line-height:1.4;color:var(--toast-c,var(--accent));display:flex;align-items:center;}
+.toast .t-ico svg{width:16px;height:16px;display:block;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
+.toast.ok{--toast-c:var(--ok);}
+.toast.err{--toast-c:var(--err);}
+.toast.info{--toast-c:var(--accent);}
+
+/* ============ Confirm dialog ============ */
+#confirm-modal .box{width:380px;}
+#confirm-msg{color:var(--text-2);font-size:13.5px;margin:0 0 6px;line-height:1.6;word-break:break-all;}
+#confirm-modal .btn.danger-solid{background:var(--err);color:#fff;box-shadow:0 1px 2px rgba(239,68,68,.3);}
+#confirm-modal .btn.danger-solid:hover{background:#dc2626;}
+
+/* ============ Skeleton loading ============ */
+.skel-row td{padding:12px;}
+.skel{
+  display:block;height:12px;border-radius:6px;
+  background:linear-gradient(90deg,var(--border) 25%,var(--panel-2) 50%,var(--border) 75%);
+  background-size:200% 100%;animation:skel 1.2s ease infinite;
+}
+@keyframes skel{from{background-position:200% 0;}to{background-position:-200% 0;}}
+
+/* ============ Sortable table headers ============ */
+th.sortable{cursor:pointer;user-select:none;white-space:nowrap;}
+th.sortable:hover{color:var(--text);}
+th.sortable::after{
+  content:"";display:inline-block;width:0;height:0;margin-left:5px;vertical-align:middle;
+  border-left:3.5px solid transparent;border-right:3.5px solid transparent;
+  border-top:4px solid var(--border-strong);
+}
+th.sortable.asc::after{border-top:none;border-bottom:4px solid var(--accent);}
+th.sortable.desc::after{border-top:4px solid var(--accent);}
+
+/* ============ Empty state ============ */
+.empty-state{padding:36px 20px;text-align:center;}
+.empty-state .empty-ico{
+  width:46px;height:46px;margin:0 auto 12px;border-radius:14px;
+  background:var(--panel-2);border:1px dashed var(--border-strong);
+  display:flex;align-items:center;justify-content:center;color:var(--dim);
+}
+.empty-state .empty-ico svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;}
+.empty-state .empty-title{font-size:13.5px;color:var(--text-2);font-weight:500;margin-bottom:3px;}
+.empty-state .empty-desc{font-size:12.5px;color:var(--dim);margin-bottom:14px;}
+
+/* ============ Role badge & whoami ============ */
+.who{display:flex;align-items:center;gap:9px;padding:8px 12px;margin-bottom:6px;min-width:0;}
+.who-info{display:flex;flex-direction:column;gap:1px;min-width:0;}
+.who-name{font-size:12.5px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.role-badge{
+  display:inline-block;padding:1px 7px;border-radius:999px;font-size:10px;font-weight:700;
+  letter-spacing:.03em;width:fit-content;
+}
+.role-badge.admin{background:var(--accent-soft);color:var(--accent-fg);}
+.role-badge.viewer{background:var(--warn-soft);color:var(--warn);}
+.readonly-note{
+  display:flex;align-items:center;gap:8px;padding:9px 14px;border-radius:10px;
+  background:var(--warn-soft);color:var(--warn);font-size:12.5px;
+}
+
+/* ============ Alert banners ============ */
+.alert-banner{
+  display:flex;align-items:flex-start;gap:10px;padding:12px 16px;border-radius:10px;
+  background:var(--warn-soft);border:1px solid var(--warn);color:var(--warn);
+  font-size:13px;margin-bottom:14px;
+}
+.alert-banner.ok{background:var(--ok-soft);border-color:var(--ok);color:var(--ok);}
+.alert-banner .banner-ico{font-size:16px;flex-shrink:0;display:flex;align-items:center;}
+.alert-banner .banner-ico svg{width:18px;height:18px;display:block;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
+.alert-banner .banner-text{flex:1;}
+.alert-banner .banner-dismiss{
+  background:none;border:none;color:inherit;font-size:18px;line-height:1;cursor:pointer;opacity:.6;
+}
+.alert-banner .banner-dismiss:hover{opacity:1;}
+.alert-banner .kv{font-weight:600;color:var(--text);font-variant-numeric:tabular-nums;}
+
+/* ============ Protocol group rows ============ */
+tr.group-row td{
+  background:var(--panel-2);border-bottom:1px solid var(--border-strong);
+  padding:9px 12px !important;
+}
+tr.group-row:hover{background:var(--panel-2) !important;}
+.group-tag{
+  display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;
+  text-transform:uppercase;letter-spacing:.06em;padding:3px 10px;border-radius:999px;
+}
+.group-tag.openai{background:var(--tag-openai-bg);color:var(--tag-openai-fg);}
+.group-tag.anthropic{background:var(--tag-anthropic-bg);color:var(--tag-anthropic-fg);}
+.group-count{font-size:11.5px;color:var(--dim);margin-left:8px;}
+
+/* ============ Status tokens: dot + badge (unified design system) ============ */
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;flex-shrink:0;background:var(--dim);}
+.dot.ok{background:var(--ok);}
+.dot.warn{background:var(--warn);}
+.dot.err{background:var(--err);}
+.dot.info{background:var(--info);}
+.dot.muted{background:var(--dim);}
+.badge{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;line-height:1;padding:3px 9px;border-radius:999px;border:1px solid transparent;white-space:nowrap;font-variant-numeric:tabular-nums;}
+.badge .dot{width:6px;height:6px;}
+.badge.ok{background:var(--ok-soft);color:var(--ok);}
+.badge.warn{background:var(--warn-soft);color:var(--warn);}
+.badge.err{background:var(--err-soft);color:var(--err);}
+.badge.info{background:var(--info-soft);color:var(--info);}
+.badge.muted{background:var(--panel-2);color:var(--dim);border-color:var(--border);}
+
+/* ============ Health score ============ */
+.health{display:flex;align-items:center;gap:8px;min-width:120px;}
+.h-bar{flex:1;height:6px;border-radius:3px;background:var(--border);overflow:hidden;position:relative;}
+.h-fill{height:100%;border-radius:3px;background:var(--ok);transition:width .3s ease;}
+.h-fill.warn{background:var(--warn);}
+.h-fill.bad{background:var(--err);}
+.h-txt{font-size:11.5px;color:var(--dim);font-variant-numeric:tabular-nums;white-space:nowrap;}
+.h-err{font-size:11px;color:var(--err);white-space:nowrap;}
+
+/* ============ Monitor: error rows & filters ============ */
+tr.row-err{background:var(--err-soft) !important;}
+tr.row-err:hover{background:var(--err-soft) !important;}
+tr.call-row{cursor:pointer;}
+tr.detail-row td{border-bottom:1px solid var(--border-strong);}
+/* Monitor table: keep the row scannable. Long values truncate with the full
+   text in a tooltip, and the trace modal carries everything else. */
+th.col-expand,td.col-expand{width:26px;padding-left:14px;padding-right:0;}
+.expander{color:var(--dim);font-size:14px;display:inline-block;transition:transform .12s ease;}
+tr.call-row:hover .expander{color:var(--accent-fg);transform:translateX(2px);}
+td.truncate{max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+td.nowrap,th.nowrap{white-space:nowrap;}
+th.num,td.num{text-align:right;font-variant-numeric:tabular-nums;}
+.retry-hint{margin-left:6px;color:var(--warn);font-size:11px;font-variant-numeric:tabular-nums;cursor:help;}
+/* Policy form: group related knobs so their relationship is visible, and show
+   the derived worst case rather than making the user compute it. */
+.fieldset{border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:14px;background:var(--panel-2);}
+.fs-head{font-size:13px;font-weight:600;margin-bottom:3px;}
+.fs-desc{font-size:11.5px;color:var(--dim);line-height:1.5;margin-bottom:12px;}
+.preview{border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:8px;padding:12px 14px;background:var(--panel-2);}
+.pv-row{display:flex;justify-content:space-between;gap:12px;font-size:12.5px;padding:3px 0;}
+.pv-l{color:var(--dim);}
+.pv-v{font-variant-numeric:tabular-nums;font-weight:500;}
+.pv-warn{margin-top:10px;padding-top:10px;border-top:1px dashed var(--border);color:var(--warn);font-size:11.5px;line-height:1.65;}
+/* Stats range bar: presets and custom range read as two distinct groups
+   instead of one flat row of buttons and inputs. */
+.range-bar{display:flex;align-items:center;gap:14px;margin-bottom:14px;flex-wrap:wrap;}
+.range-presets{display:flex;gap:6px;flex-wrap:wrap;}
+.range-divider{width:1px;height:22px;background:var(--border);flex-shrink:0;}
+.range-custom{display:flex;align-items:center;gap:8px;}
+.range-custom .date-input{width:132px;}
+.range-arrow{color:var(--dim);font-size:12px;}
+/* Upstream list: position encodes call order, so the rank badge and the dimmed
+   row for a tripped breaker carry the routing story visually. */
+th.col-rank,td.col-rank{width:38px;}
+.up-rank{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 5px;border-radius:6px;background:var(--accent-soft);color:var(--accent-fg);font-size:11.5px;font-weight:600;font-variant-numeric:tabular-nums;}
+.up-rank-off{background:var(--code-bg);color:var(--dim);font-weight:400;}
+tr.up-row-broken{opacity:.62;}
+tr.up-row-broken:hover{opacity:1;}
+@media(max-width:640px){.range-divider{display:none;}.range-bar{gap:10px;}}
+#confirm-gate{margin-top:14px;}
+#confirm-gate code{background:var(--code-bg);padding:1px 6px;border-radius:4px;font-size:12px;}
+.btn:disabled{opacity:.45;cursor:not-allowed;}
+.detail-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px 24px;font-size:12.5px;}
+.detail-grid>div{display:flex;flex-direction:column;gap:2px;}
+.d-l{font-size:11px;color:var(--dim);font-weight:600;text-transform:uppercase;letter-spacing:.04em;}
+.d-v{color:var(--text);word-break:break-all;}
+.filter-bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px;}
+.filter-bar select{width:auto;min-width:130px;padding:6px 10px;font-size:12.5px;}
+.filter-hint{color:var(--dim);font-size:12px;margin-left:auto;}
+.auto-refresh-dot{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--dim);}
+.auto-refresh-dot::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--ok);animation:pulse 2s ease infinite;}
+.auto-refresh-dot.paused::before{background:var(--warn);animation:none;}
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:.35;}}
+
+/* ============ Quota progress bar ============ */
+.quota{min-width:110px;}
+.quota-bar{height:5px;border-radius:3px;background:var(--border);overflow:hidden;margin-bottom:4px;}
+.quota-fill{height:100%;border-radius:3px;background:var(--ok);transition:width .3s ease;}
+.quota-fill.warn{background:var(--warn);}
+.quota-fill.over{background:var(--err);}
+.quota-txt{font-size:11.5px;color:var(--dim);font-variant-numeric:tabular-nums;}
+
+/* ============ Scrollbar ============ */
+::-webkit-scrollbar{width:10px;height:10px;}
+::-webkit-scrollbar-thumb{background:var(--border-strong);border-radius:8px;border:2px solid var(--bg);}
+::-webkit-scrollbar-thumb:hover{background:var(--dim);}
+::-webkit-scrollbar-track{background:transparent;}
+
+/* ============ Responsive ============ */
+@media (max-width:1080px){
+  main{padding:24px 24px 44px;}
+}
+@media (max-width:920px){
+  .ov-kpi{grid-template-columns:repeat(2,1fr);}
+  .ov-grid{grid-template-columns:1fr;}
+  .detail-grid{grid-template-columns:repeat(2,1fr);}
+}
+@media (max-width:860px){
+  #app{flex-direction:column;}
+  .mtop{display:flex;}
+  main{padding:18px 14px 40px;max-width:none;}
+  /* sidebar becomes off-canvas drawer */
+  .sidebar{
+    position:fixed;top:0;left:0;bottom:0;height:100vh;width:250px;max-width:82vw;
+    transform:translateX(-100%);transition:transform .25s ease;z-index:90;
+    box-shadow:0 12px 40px rgba(0,0,0,.28);
+  }
+  .sidebar.open{transform:none;}
+  .brand-name,.brand-sub,.nav-item .txt{display:block;}
+  .nav-item{justify-content:flex-start;padding:11px 12px;}
+  .sidebar-backdrop.open{display:block;}
+  .page-head{flex-direction:column;align-items:flex-start;gap:10px;}
+}
+@media (max-width:560px){
+  .ov-kpi{grid-template-columns:1fr;}
+  .detail-grid{grid-template-columns:1fr;}
+  .page-title{font-size:var(--fs-xl);}
+  main{padding:16px 12px 36px;}
+  .filter-bar select{min-width:108px;}
+}
+
+/* ============ Monitor pager + CSV ============ */
+.pager{display:flex;align-items:center;gap:10px;margin-top:14px;flex-wrap:wrap;}
+.pager .p-info{color:var(--dim);font-size:12.5px;font-variant-numeric:tabular-nums;}
+.pager .p-controls{display:flex;gap:6px;align-items:center;margin-left:auto;flex-wrap:wrap;}
+.pager button.btn.ghost.sm{padding:5px 11px;font-size:12.5px;}
+.pager button:disabled{opacity:.4;cursor:not-allowed;pointer-events:none;}
+.pager select{width:auto;padding:5px 8px;font-size:12.5px;}
+
+/* ============ Trace drawer (off-canvas right) ============ */
+.drawer-backdrop{display:none;position:fixed;inset:0;background:rgba(15,18,30,.45);z-index:95;}
+.drawer-backdrop.open{display:block;}
+.drawer{
+  position:fixed;top:0;right:0;bottom:0;width:min(460px,92vw);z-index:96;
+  background:var(--panel);border-left:1px solid var(--border);
+  box-shadow:var(--shadow-lg);transform:translateX(100%);transition:transform .26s ease;
+  display:flex;flex-direction:column;
+}
+.drawer.open{transform:none;}
+.drawer-head{display:flex;align-items:center;gap:10px;padding:16px 18px;border-bottom:1px solid var(--border);flex-shrink:0;}
+.drawer-head h3{margin:0;font-size:var(--fs-lg);font-weight:var(--fw-bold);flex:1;}
+.drawer-close{width:32px;height:32px;border-radius:9px;border:none;background:var(--panel-2);color:var(--text);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;}
+.drawer-close .ico{width:18px;height:18px;}
+.drawer-body{padding:18px;overflow-y:auto;flex:1;}
+.trace-sec{margin-bottom:20px;}
+.trace-sec:last-child{margin-bottom:0;}
+.trace-sec h4{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--dim);margin:0 0 10px;font-weight:var(--fw-semi);}
+.trace-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px 18px;}
+.trace-grid>div{display:flex;flex-direction:column;gap:3px;min-width:0;}
+.trace-grid .d-l{font-size:11px;color:var(--dim);font-weight:600;}
+.trace-grid .d-v{font-size:13px;color:var(--text);word-break:break-all;}
+.trace-full{grid-column:1/-1;}
+.trace-err{background:var(--err-soft);border:1px solid var(--err);border-radius:10px;padding:12px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px;color:var(--err);white-space:pre-wrap;word-break:break-all;}
+.trace-copy{margin-top:8px;}
+.trace-chain{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+.trace-node{display:inline-flex;align-items:center;gap:6px;padding:6px 11px;border-radius:999px;font-size:12px;font-weight:600;border:1px solid var(--border);background:var(--panel-2);}
+.trace-node.ok{border-color:var(--ok);color:var(--ok);}
+.trace-node.err{border-color:var(--err);color:var(--err);}
+.trace-arrow{color:var(--dim);font-size:13px;}
+
+/* ============ Key creation result ============ */
+.key-result{display:none;}
+.key-result.show{display:block;}
+.key-result p{line-height:1.6;}
+.key-result .kr-key{display:flex;gap:8px;align-items:center;margin:10px 0;}
+.key-result .kr-key code{flex:1;word-break:break-all;font-size:12px;padding:9px 11px;}
+.key-result pre{background:var(--code-bg);border:1px solid var(--border);border-radius:10px;padding:13px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11.5px;white-space:pre-wrap;word-break:break-all;max-height:240px;overflow:auto;margin:0;}
+</style>
+
+</head>
+<body>
+
+<!-- Login screen -->
+<div id="login" class="hidden">
+  <div class="box">
+    <div class="logo-lg">⇄</div>
+    <h1>LLM Proxy</h1>
+    <p>登录管理面板以继续</p>
+    <label>用户名</label><input id="login-user" value="admin" autocomplete="username">
+    <label>密码</label><input id="login-pass" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
+    <div style="margin-top:20px;"><button class="btn" style="width:100%;padding:10px;" onclick="doLogin()">登 录</button></div>
+    <p class="msg err" id="login-msg" style="margin-top:12px;"></p>
+  </div>
+</div>
+
+<!-- App -->
+<div id="app" class="hidden">
+  <header class="mtop">
+    <button class="mtop-btn" onclick="toggleSidebar()" aria-label="菜单"><span class="ico" data-icon="menu"></span></button>
+    <div class="mtop-brand" id="mtop-title">总览</div>
+  </header>
+  <div class="sidebar-backdrop" onclick="toggleSidebar(false)"></div>
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-logo">⇄</div>
+      <div>
+        <div class="brand-name">LLM Proxy</div>
+        <div class="brand-sub">API 中转代理</div>
+      </div>
+    </div>
+    <button class="nav-item active" data-tab="overview"><span class="ico" data-icon="home"></span><span class="txt">总览</span></button>
+    <button class="nav-item" data-tab="config"><span class="ico" data-icon="gear"></span><span class="txt">配置管理</span></button>
+    <button class="nav-item" data-tab="keys" id="nav-keys" data-admin-only><span class="ico" data-icon="key"></span><span class="txt">客户端 Key</span></button>
+    <button class="nav-item" data-tab="monitor"><span class="ico" data-icon="activity"></span><span class="txt">监控日志</span></button>
+    <button class="nav-item" data-tab="stats"><span class="ico" data-icon="chart"></span><span class="txt">统计报表</span></button>
+    <button class="nav-item" data-tab="users" id="nav-users"><span class="ico" data-icon="user"></span><span class="txt">账号管理</span></button>
+    <div class="sidebar-foot">
+      <div class="who">
+        <span class="ico" data-icon="user"></span>
+        <span class="who-info">
+          <span class="who-name" id="who-name"></span>
+          <span class="role-badge" id="role-badge"></span>
+        </span>
+      </div>
+      <button class="nav-item" id="theme-btn" onclick="toggleTheme()"><span class="ico" data-icon="moon"></span><span class="txt" id="theme-txt">暗色模式</span></button>
+      <button class="nav-item" onclick="openShortcuts()" title="键盘快捷键 (?)"><span class="ico" data-icon="key"></span><span class="txt">快捷键</span></button>
+      <button class="nav-item" onclick="openPwd()"><span class="ico" data-icon="lock"></span><span class="txt">修改密码</span></button>
+      <button class="nav-item" onclick="doLogout()"><span class="ico" data-icon="logout"></span><span class="txt">退出登录</span></button>
+    </div>
+  </aside>
+
+<main>
+  <!-- 总览 -->
+  <section id="tab-overview">
+    <div class="page-head" style="display:flex;align-items:flex-end;justify-content:space-between;">
+      <div>
+        <h1 class="page-title">总览</h1>
+        <p class="page-desc">一眼掌握网关健康、今日用量与潜在风险</p>
+      </div>
+      <div class="row">
+        <span class="ov-updated" id="ov-updated"></span>
+        <button class="btn ghost sm" onclick="loadOverview()">刷新</button>
+      </div>
+    </div>
+
+    <div class="ov-kpi" id="ov-kpi"></div>
+
+    <div class="card ov-trend-card">
+      <h2><span class="ico" data-icon="chart"></span>今日请求趋势（按小时）</h2>
+      <div id="ov-trend"></div>
+    </div>
+
+    <div class="ov-grid">
+      <div class="card">
+        <h2><span class="ico" data-icon="activity"></span>上游健康</h2>
+        <div id="ov-health"></div>
+      </div>
+      <div class="card">
+        <h2><span class="ico" data-icon="chart"></span>今日用量</h2>
+        <div id="ov-usage"></div>
+      </div>
+      <div class="card">
+        <h2><span class="ico" data-icon="alert"></span>风险洞察</h2>
+        <div id="ov-insights"></div>
+      </div>
+      <div class="card">
+        <h2><span class="ico" data-icon="bolt"></span>近期失败调用</h2>
+        <div id="ov-fails"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 配置管理 -->
+  <section id="tab-config" class="hidden">
+    <div class="page-head">
+      <h1 class="page-title">配置管理</h1>
+      <p class="page-desc">管理上游 API 端点、重试与轮询策略</p>
+    </div>
+    <div class="readonly-note" id="readonly-note" style="display:none;">
+      当前为只读账号，可查看配置与监控数据，但不能修改任何设置。
+    </div>
+    <div class="card">
+      <h2>上游 API / Key</h2>
+      <div class="card-head" style="margin-top:14px;">
+        <span style="color:var(--dim);font-size:12.5px;" id="upstreams-count"></span>
+        <div class="row">
+          <button class="btn ghost sm" onclick="reloadConfig()">刷新</button>
+          <button class="btn ghost sm" onclick="exportConfig()" data-admin-only>导出配置</button>
+          <input type="file" id="import-input" style="display:none;" accept=".json" onchange="importConfig(this)">
+          <button class="btn ghost sm" onclick="$('import-input').click()" data-admin-only>导入配置</button>
+          <button class="btn sm" onclick="openUpModal()" data-admin-only>＋ 新增上游</button>
+        </div>
+      </div>
+      <div class="overflow">
+      <table>
+        <thead><tr><th class="col-rank">#</th><th>名称</th><th>优先级</th><th>Base URL</th><th>Key</th><th>健康</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody id="upstreams"></tbody>
+      </table>
+      </div>
+    </div>
+    <div class="card">
+      <h2>重试与轮询策略</h2>
+
+      <div class="fieldset">
+        <div class="fs-head">单个上游内的重试</div>
+        <div class="fs-desc">同一个上游失败后重试几次、每次隔多久。退避按 2 倍递增，直到上限。</div>
+        <div class="grid">
+          <div><label>最大尝试次数</label><input id="p-max" type="number" min="1" oninput="updatePolicyPreview()"></div>
+          <div><label>基础退避 (ms)</label><input id="p-base" type="number" min="0" oninput="updatePolicyPreview()"></div>
+          <div><label>退避上限 (ms)</label><input id="p-cap" type="number" min="0" oninput="updatePolicyPreview()"></div>
+        </div>
+      </div>
+
+      <div class="fieldset">
+        <div class="fs-head">跨上游的切换与总闸门</div>
+        <div class="fs-desc">一个上游用尽重试后切换到下一个；总超时是整个请求的硬上限。</div>
+        <div class="grid">
+          <div><label>最大故障切换次数</label><input id="p-rot" type="number" min="0" oninput="updatePolicyPreview()"><div class="hint">0 = 不限制，会依次尝试所有上游。</div></div>
+          <div><label>单请求总超时（秒）</label><input id="p-timeout" type="number" min="0" oninput="updatePolicyPreview()"><div class="hint">0 = 不限制。流式响应开始后不受此限制。</div></div>
+        </div>
+      </div>
+
+      <div class="preview" id="policy-preview"></div>
+
+      <div class="row" style="margin-top:16px;">
+        <button class="btn" onclick="savePolicy()" data-admin-only>保存策略</button>
+      </div>
+      <p class="msg" id="policy-msg"></p>
+    </div>
+    <div class="card">
+      <h2>Webhook 告警</h2>
+      <p style="color:var(--dim);font-size:12.5px;margin:0 0 14px;">
+        当某个上游连续失败达到阈值时，向企业微信 / 钉钉机器人推送告警。同一上游在冷却时间内只推送一次，避免告警风暴。
+      </p>
+      <div class="row" style="gap:8px;margin-bottom:4px;">
+        <button class="chip" id="alert-toggle" onclick="toggleAlert()">未启用</button>
+      </div>
+      <div class="grid">
+        <div style="grid-column:1/-1;"><label>Webhook URL</label><input id="a-url" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..."></div>
+        <div><label>连续失败阈值（次）</label><input id="a-streak" type="number" min="1" value="3"></div>
+        <div><label>冷却时间（秒）</label><input id="a-cool" type="number" min="0" value="600"></div>
+      </div>
+      <div class="row" style="margin-top:16px;">
+        <button class="btn" onclick="saveAlert()" data-admin-only>保存告警设置</button>
+        <button class="btn ghost" onclick="testAlert()" data-admin-only>发送测试告警</button>
+      </div>
+      <p class="msg" id="alert-msg"></p>
+    </div>
+  </section>
+
+  <!-- 客户端 Key -->
+  <section id="tab-keys" class="hidden">
+    <div class="page-head">
+      <h1 class="page-title">客户端 Key</h1>
+      <p class="page-desc">给调用代理的应用签发凭据，支持到期时间与 token 额度控制</p>
+    </div>
+    <div id="key-banner" class="alert-banner hidden"></div>
+    <div class="card">
+      <h2>客户端 API Key</h2>
+      <p style="color:var(--dim);font-size:12.5px;margin:0 0 14px;">
+        应用请求头 <code>Authorization: Bearer &lt;key&gt;</code> 必须匹配某个启用、未过期、未超额度的 key，否则拒绝。若一个 key 都不配置，则代理开放（任何人可调）。
+      </p>
+      <div class="card-head" style="margin-top:14px;">
+        <span style="color:var(--dim);font-size:12.5px;" id="clientkeys-count"></span>
+        <div class="row">
+          <button class="btn ghost sm" onclick="reloadKeys()">刷新</button>
+          <button class="btn sm" onclick="openKeyModal()" data-admin-only>＋ 签发新 Key</button>
+        </div>
+      </div>
+      <div class="overflow">
+      <table>
+        <thead><tr><th class="sortable" data-table="keys" data-sort="name">名称</th><th>Key</th><th class="sortable" data-table="keys" data-sort="expires_at" data-type="num">到期</th><th class="sortable" data-table="keys" data-sort="token_quota" data-type="num">额度(token)</th><th class="sortable" data-table="keys" data-sort="used_tokens" data-type="num">已用</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody id="clientkeys"></tbody>
+      </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- 监控日志 -->
+  <section id="tab-monitor" class="hidden">
+    <div class="page-head">
+      <h1 class="page-title">监控日志</h1>
+      <p class="page-desc">最近 100 次代理调用，每 5 秒自动刷新，悬停表格时暂停</p>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <h2>最近调用</h2>
+        <div class="row">
+          <span class="auto-refresh-dot" id="refresh-dot">自动刷新中</span>
+          <button class="btn ghost sm" onclick="refreshCalls()">立即刷新</button>
+        </div>
+      </div>
+      <div class="filter-bar">
+        <select id="f-route" onchange="refreshCalls()"><option value="">全部路由</option></select>
+        <select id="f-upstream" onchange="refreshCalls()"><option value="">全部上游</option></select>
+        <select id="f-status" onchange="refreshCalls()"><option value="">全部状态</option></select>
+        <select id="f-key" onchange="refreshCalls()"><option value="">全部 Key</option></select>
+      </div>
+      <div class="overflow">
+      <table id="calls-table">
+        <thead><tr>
+          <th class="col-expand"></th>
+          <th class="sortable" data-table="calls" data-sort="time">时间</th>
+          <th class="sortable" data-table="calls" data-sort="router">路由</th>
+          <th class="sortable" data-table="calls" data-sort="upstream">上游</th>
+          <th class="sortable num" data-table="calls" data-sort="status_code" data-type="num">状态</th>
+          <th class="sortable num" data-table="calls" data-sort="duration_ms" data-type="num">耗时</th>
+          <th class="sortable num" data-table="calls" data-sort="total_tokens" data-type="num">token</th>
+          <th>结果</th>
+        </tr></thead>
+        <tbody id="calls"></tbody>
+      </table>
+      </div>
+      <div class="pager">
+        <span class="p-info" id="calls-info">共 0 条</span>
+        <div class="p-controls">
+          <button class="btn ghost sm" id="calls-csv" onclick="exportCallsCSV()">导出 CSV</button>
+          <select id="calls-ps" onchange="setCallPageSize(this.value)">
+            <option value="25" selected>25/页</option>
+            <option value="50">50/页</option>
+            <option value="100">100/页</option>
+            <option value="0">全部</option>
+          </select>
+          <button class="btn ghost sm" id="cp-prev" onclick="changeCallPage(-1)">上一页</button>
+          <span class="p-info" id="calls-page">1 / 1</span>
+          <button class="btn ghost sm" id="cp-next" onclick="changeCallPage(1)">下一页</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 统计报表 -->
+  <section id="tab-stats" class="hidden">
+    <div class="page-head">
+      <h1 class="page-title">统计报表</h1>
+      <p class="page-desc">调用量、成功率与 token 用量趋势</p>
+    </div>
+    <div class="card">
+      <div class="range-bar">
+        <div class="range-presets">
+          <button class="chip" data-range="0" onclick="pickRange(this,0)">当天</button>
+          <button class="chip" data-range="3" onclick="pickRange(this,3)">近3天</button>
+          <button class="chip" data-range="7" onclick="pickRange(this,7)">近7天</button>
+          <button class="chip" data-range="15" onclick="pickRange(this,15)">近15天</button>
+          <button class="chip" data-range="30" onclick="pickRange(this,30)">近30天</button>
+        </div>
+        <div class="range-divider"></div>
+        <div class="range-custom">
+          <input id="r-from" type="date" class="date-input">
+          <span class="range-arrow">→</span>
+          <input id="r-to" type="date" class="date-input">
+          <button class="btn ghost sm" onclick="customRange()">查询</button>
+        </div>
+      </div>
+      <div style="color:var(--dim);font-size:12.5px;margin-bottom:14px;" id="range-label"></div>
+      <div class="stat-grid" id="stats-today"></div>
+    </div>
+    <div class="card">
+      <h2 id="trend-title">请求次数趋势</h2>
+      <div class="overflow"><div id="trend-chart"></div></div>
+      <div id="chart-tip" class="chart-tip hidden"></div>
+    </div>
+    <div class="card">
+      <h2>按客户端 Key 的 Token 用量</h2>
+      <div class="overflow">
+      <table>
+        <thead><tr><th>客户端 Key</th><th>Token 用量</th></tr></thead>
+        <tbody id="stats-bykey"></tbody>
+      </table>
+      </div>
+    </div>
+    <div class="card">
+      <h2>按日统计</h2>
+      <div class="overflow">
+      <table>
+        <thead><tr><th class="sortable" data-table="days" data-sort="date">日期</th><th class="sortable" data-table="days" data-sort="total" data-type="num">调用</th><th class="sortable" data-table="days" data-sort="ok" data-type="num">成功</th><th class="sortable" data-table="days" data-sort="failed" data-type="num">失败</th><th class="sortable" data-table="days" data-sort="rate_limit" data-type="num">限流</th><th class="sortable" data-table="days" data-sort="timeout" data-type="num">超时</th><th class="sortable" data-table="days" data-sort="network" data-type="num">网络</th><th class="sortable" data-table="days" data-sort="server_err" data-type="num">服务端</th><th class="sortable" data-table="days" data-sort="prompt_tokens" data-type="num">输入tok</th><th class="sortable" data-table="days" data-sort="completion_tokens" data-type="num">输出tok</th><th class="sortable" data-table="days" data-sort="total_tokens" data-type="num">总tok</th></tr></thead>
+        <tbody id="stats-days"></tbody>
+      </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- 账号管理 -->
+  <section id="tab-users" class="hidden">
+    <div class="page-head">
+      <h1 class="page-title">账号管理</h1>
+      <p class="page-desc">管理面板登录账号与权限角色</p>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <h2>面板账号</h2>
+        <div class="row">
+          <button class="btn ghost sm" onclick="reloadUsers()">刷新</button>
+          <button class="btn sm" onclick="openUserModal()">＋ 新增账号</button>
+        </div>
+      </div>
+      <p style="color:var(--dim);font-size:12.5px;margin:0 0 14px;">
+        <b>管理员</b>可修改配置、管理 Key 和告警；<b>只读</b>账号只能查看监控与统计，无法执行任何写操作。最后一个管理员不可删除。
+      </p>
+      <div class="overflow">
+      <table>
+        <thead><tr><th>用户名</th><th>角色</th><th>操作</th></tr></thead>
+        <tbody id="users"></tbody>
+      </table>
+      </div>
+    </div>
+  </section>
+</main>
+</div>
+
+<!-- Trace drawer -->
+<div id="trace-backdrop" class="drawer-backdrop" onclick="closeTrace()"></div>
+<aside id="trace-drawer" class="drawer" aria-hidden="true">
+  <div class="drawer-head">
+    <span id="trace-dot" class="dot muted"></span>
+    <h3>调用详情</h3>
+    <button class="drawer-close" onclick="closeTrace()" aria-label="关闭"><span class="ico" data-icon="close"></span></button>
+  </div>
+  <div class="drawer-body" id="trace-body"></div>
+</aside>
+
+<!-- Toast container -->
+<div id="toasts"></div>
+
+<!-- Generic confirm dialog -->
+<div id="confirm-modal" class="modal hidden">
+  <div class="box">
+    <h3 id="confirm-title">确认操作</h3>
+    <p id="confirm-msg"></p>
+    <div id="confirm-gate" class="hidden">
+      <label>请输入 <code id="confirm-gate-name"></code> 以确认</label>
+      <input id="confirm-gate-input" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="row" style="margin-top:20px;justify-content:flex-end;">
+      <button class="btn ghost" onclick="closeConfirm()">取消</button>
+      <button class="btn danger-solid" id="confirm-ok">确认</button>
+    </div>
+  </div>
+</div>
+
+<!-- Keyboard shortcuts help -->
+<div id="shortcuts-modal" class="modal hidden">
+  <div class="box" style="width:440px;">
+    <h3>键盘快捷键</h3>
+    <div class="shortcut-list">
+      <div class="sc-row"><span class="sc-keys"><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd><kbd>5</kbd><kbd>6</kbd></span><span class="sc-desc">切换到 总览 / 配置 / Key / 监控 / 统计 / 账号 标签页</span></div>
+      <div class="sc-row"><span class="sc-keys"><kbd>R</kbd></span><span class="sc-desc">刷新当前标签页数据</span></div>
+      <div class="sc-row"><span class="sc-keys"><kbd>T</kbd></span><span class="sc-desc">切换暗色 / 亮色主题</span></div>
+      <div class="sc-row"><span class="sc-keys"><kbd>N</kbd></span><span class="sc-desc">在 Key 标签页签发新 Key（管理员）</span></div>
+      <div class="sc-row"><span class="sc-keys"><kbd>/</kbd></span><span class="sc-desc">聚焦监控日志筛选框</span></div>
+      <div class="sc-row"><span class="sc-keys"><kbd>?</kbd></span><span class="sc-desc">显示本快捷键帮助</span></div>
+      <div class="sc-row"><span class="sc-keys"><kbd>Esc</kbd></span><span class="sc-desc">关闭弹窗 / 取消聚焦</span></div>
+    </div>
+    <div class="row" style="margin-top:18px;justify-content:flex-end;">
+      <button class="btn" onclick="closeShortcuts()">知道了</button>
+    </div>
+  </div>
+</div>
+
+<!-- Upstream test result modal -->
+<div id="test-modal" class="modal hidden">
+  <div class="box" style="width:500px;">
+    <h3><span id="test-dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--dim);margin-right:8px;vertical-align:middle;"></span>上游连通性测试</h3>
+    <div style="font-size:12.5px;color:var(--dim);margin:0 0 12px;">
+      <span id="test-up"></span> · <span id="test-proto"></span>
+    </div>
+    <div id="test-body" style="background:var(--code-bg);border:1px solid var(--border);border-radius:8px;padding:12px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px;max-height:280px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;"></div>
+    <div class="row" style="margin-top:16px;justify-content:flex-end;">
+      <span id="test-duration" style="color:var(--dim);font-size:12.5px;margin-right:auto;"></span>
+      <button class="btn" onclick="closeTestModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- Upstream add/edit modal -->
+<div id="up-modal" class="modal hidden">
+  <div class="box" style="width:440px;">
+    <h3 id="up-modal-title">新增上游</h3>
+    <label>名称</label>
+    <input id="u-name" placeholder="如 OpenAI 主 key">
+    <div class="row" style="gap:12px;align-items:flex-start;">
+      <div style="flex:0 0 140px;"><label>协议</label><select id="u-protocol"><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option></select></div>
+      <div style="flex:1;"><label>Base URL</label><input id="u-base" placeholder="https://api.openai.com"></div>
+    </div>
+    <label>API Key</label>
+    <input id="u-key" placeholder="sk-... 或完整 key">
+    <label>优先级</label>
+    <input id="u-priority" type="number" value="0" placeholder="0">
+    <div class="hint">数字越大越优先调用；相同优先级的上游轮询分摊流量。高优先级上游连续失败会被临时降级，恢复后自动回到原位。</div>
+    <p class="msg err" id="up-modal-msg"></p>
+    <div class="row" style="margin-top:18px;justify-content:flex-end;">
+      <button class="btn ghost" onclick="closeUpModal()">取消</button>
+      <button class="btn" onclick="addUpstream()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- Client key add/edit modal -->
+<div id="key-modal" class="modal hidden">
+  <div class="box" style="width:440px;">
+    <h3 id="key-modal-title">签发新 Key</h3>
+    <div class="key-form" id="key-form-wrap">
+    <label>名称</label>
+    <input id="k-name" placeholder="如 我的应用A">
+    <label>API Key</label>
+    <div class="row" style="flex-wrap:nowrap;">
+      <input id="k-key" placeholder="自定义一串强随机字符串" style="flex:1;">
+      <button class="btn ghost" onclick="genKey()" style="white-space:nowrap;">随机生成</button>
+    </div>
+    <div class="row" style="gap:12px;align-items:flex-start;">
+      <div style="flex:1;"><label>到期时间（留空=永不过期）</label><input id="k-exp" type="datetime-local"></div>
+      <div style="flex:1;"><label>Token 额度（0=无限）</label><input id="k-quota" type="number" min="0" value="0"></div>
+    </div>
+    <p class="msg err" id="key-modal-msg"></p>
+    <div class="row" style="margin-top:18px;justify-content:flex-end;">
+      <button class="btn ghost" onclick="closeKeyModal()">取消</button>
+      <button class="btn" onclick="addKey()">保存</button>
+    </div>
+    </div><!-- /key-form-wrap -->
+    <div class="key-result" id="key-result">
+      <p style="color:var(--dim);font-size:13px;margin:0 0 4px;">已为 <b id="kr-name" style="color:var(--text);"></b> 签发客户端 Key，请立即复制保存（关闭后将无法再次查看完整 Key）。</p>
+      <div class="kr-key">
+        <code id="kr-key-val" class="mono"></code>
+        <button class="btn ghost sm" onclick="copyText('kr-key-val',this)">复制</button>
+      </div>
+      <label>调用示例（curl）</label>
+      <pre id="kr-curl"></pre>
+      <div class="trace-copy"><button class="btn ghost sm" onclick="copyText('kr-curl',this)">复制 curl</button></div>
+      <div class="row" style="margin-top:18px;justify-content:flex-end;">
+        <button class="btn" onclick="finishKeyResult()">完成</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Add user modal -->
+<div id="user-modal" class="modal hidden">
+  <div class="box" style="width:400px;">
+    <h3>新增面板账号</h3>
+    <label>用户名</label>
+    <input id="nu-name" placeholder="如 teammate">
+    <label>密码（至少 6 位）</label>
+    <input id="nu-pass" type="password" placeholder="设置一个强密码">
+    <label>角色</label>
+    <select id="nu-role">
+      <option value="viewer">只读（仅查看监控与统计）</option>
+      <option value="admin">管理员（完全控制）</option>
+    </select>
+    <p class="msg err" id="user-modal-msg"></p>
+    <div class="row" style="margin-top:18px;justify-content:flex-end;">
+      <button class="btn ghost" onclick="closeUserModal()">取消</button>
+      <button class="btn" onclick="addUser()">创建</button>
+    </div>
+  </div>
+</div>
+
+<!-- Change password modal -->
+<div id="pwd-modal" class="modal hidden">
+  <div class="box">
+    <h3>修改密码</h3>
+    <p style="color:var(--dim);font-size:12.5px;margin:0 0 14px;">
+      正在修改 <b id="pwd-who" style="color:var(--text);"></b> 的密码
+    </p>
+    <label>当前密码</label><input id="pwd-old" type="password">
+    <label>新密码（至少 6 位）</label><input id="pwd-new" type="password">
+    <div class="row" style="margin-top:20px;justify-content:flex-end;">
+      <button class="btn ghost" onclick="closePwd()">取消</button>
+      <button class="btn" onclick="savePwd()">保存</button>
+    </div>
+    <p class="msg" id="pwd-msg"></p>
+  </div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+// --- icon library (SVG, stroke-based, color follows currentColor) ---
+const ICONS={
+  gear:'<path d="M12 8a4 4 0 100 8 4 4 0 000-8z"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  key:'<path d="M15 8a3 3 0 11-6 0 3 3 0 016 0z"/><path d="M12 11v6M9.5 14.5h5"/>',
+  activity:'<path d="M3 12h3l2-6 4 12 2-6h3"/>',
+  chart:'<path d="M4 20V10M10 20V4M16 20v-6"/>',
+  moon:'<path d="M21 12.8A9 9 0 1111.2 3 7 7 0 0021 12.8z"/>',
+  sun:'<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  lock:'<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/>',
+  logout:'<path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/>',
+  plus:'<path d="M12 5v14M5 12h14"/>',
+  download:'<path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
+  upload:'<path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>',
+  refresh:'<path d="M21 12a9 9 0 11-2.6-6.4M21 3v6h-6"/>',
+  eye:'<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/>',
+  eyeoff:'<path d="M17.9 17.9A10.5 10.5 0 0112 19C5 19 1 12 1 12a19 19 0 013.9-4.9M9.9 4.7A11 11 0 0112 5c7 0 11 7 11 7a19 19 0 01-3.2 4.5"/><path d="M1 1l22 22"/>',
+  copy:'<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>',
+  bolt:'<path d="M13 2L4 14h6l-1 8 9-12h-6l1-8z"/>',
+  clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/>',
+  alert:'<path d="M12 3l10 18H2L12 3z"/><path d="M12 10v4M12 17.5v.5"/>',
+  check:'<path d="M20 6L9 17l-5-5"/>',
+  close:'<path d="M18 6L6 18M6 6l12 12"/>',
+  user:'<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6 8-6s8 2 8 6"/>',
+  home:'<path d="M3 11l9-8 9 8"/><path d="M5 10v10a1 1 0 001 1h12a1 1 0 001-1V10"/><path d="M9 21v-6h6v6"/>',
+  pulse:'<path d="M3 12h4l2-7 4 14 2-7h6"/>',
+  menu:'<path d="M4 6h16M4 12h16M4 18h16"/>',
+};
+function icon(name,cls){
+  const svg=ICONS[name]||ICONS.gear;
+  return `<svg viewBox="0 0 24 24" ${cls?`class="${cls}"`:''}>${svg}</svg>`;
+}
+function injectIcons(root){
+  (root||document).querySelectorAll('[data-icon]').forEach(el=>{
+    const n=el.getAttribute('data-icon');
+    // theme toggle uses sun or moon dynamically
+    el.innerHTML=icon(n);
+  });
+}
+// Compact number: 1234 -> 1.23K, 4_500_000 -> 4.5M, 2e9 -> 2B. Below 1000 shown as-is.
+// fmtMs renders a latency so the column stays narrow: sub-second in ms, longer
+// in seconds. Paired with .num for tabular alignment.
+function fmtMs(ms){
+  ms=Number(ms)||0;
+  return ms>=1000 ? (ms/1000).toFixed(ms>=10000?0:1)+'s' : ms+'ms';
+}
+function fmtNum(n){
+  n=Number(n)||0;
+  const neg=n<0;n=Math.abs(n);
+  let out;
+  if(n<1000)out=String(n);
+  else{
+    const units=[['B',1e9],['M',1e6],['K',1e3]];
+    const u=units.find(u=>n>=u[1]);
+    let v=n/u[1];
+    v=v>=100?Math.round(v):Math.round(v*100)/100;
+    out=String(v).replace(/\.?0+$/,'')+u[0];
+  }
+  return neg?'-'+out:out;
+}
+
+// --- table sorting ---
+// sortState maps table id -> {key, dir}. dir is 1 (asc) or -1 (desc).
+const sortState={};
+function applySort(arr,tableId){
+  const st=sortState[tableId];
+  if(!st||!st.key)return arr;
+  const dir=st.dir,k=st.key;
+  return arr.slice().sort((a,b)=>{
+    let va=a[k],vb=b[k];
+    if(st.type==='num'){va=Number(va)||0;vb=Number(vb)||0;}
+    else{va=String(va??'').toLowerCase();vb=String(vb??'').toLowerCase();}
+    if(va<vb)return -dir;
+    if(va>vb)return dir;
+    return 0;
+  });
+}
+function syncSortHeaders(tableId){
+  const st=sortState[tableId];
+  document.querySelectorAll(`th.sortable[data-table="${tableId}"]`).forEach(th=>{
+    th.classList.remove('asc','desc');
+    if(st&&st.key===th.dataset.sort)th.classList.add(st.dir===1?'asc':'desc');
+  });
+}
+// delegated click handler for every sortable header
+document.addEventListener('click',e=>{
+  const th=e.target.closest('th.sortable');
+  if(!th)return;
+  const tbl=th.dataset.table,key=th.dataset.sort,type=th.dataset.type||'str';
+  const st=sortState[tbl]||(sortState[tbl]={key:null,dir:1});
+  if(st.key===key)st.dir=-st.dir; else {st.key=key;st.dir=1;st.type=type;}
+  syncSortHeaders(tbl);
+  if(tbl==='calls')refreshCallsData();
+  else if(tbl==='keys')reloadKeys();
+  else if(tbl==='days')refreshStats();
+});
+
+// --- empty state with icon + call to action ---
+function emptyState(iconName,title,desc,btnLabel,btnAction){
+  return `<tr><td colspan="99"><div class="empty-state">
+    <div class="empty-ico">${icon(iconName)}</div>
+    <div class="empty-title">${esc(title)}</div>
+    <div class="empty-desc">${esc(desc)}</div>
+    ${btnLabel?`<button class="btn sm" onclick="${btnAction}">${esc(btnLabel)}</button>`:''}
+  </div></td></tr>`;
+}
+
+// --- toast notifications ---
+function toast(msg,type){
+  type=type||'info';
+  const icn={ok:'check',err:'alert',info:'gear'}[type]||'gear';
+  const el=document.createElement('div');
+  el.className='toast '+type;
+  el.innerHTML=`<span class="t-ico">${icon(icn)}</span><span>${esc(msg)}</span>`;
+  $('toasts').appendChild(el);
+  setTimeout(()=>{el.classList.add('out');setTimeout(()=>el.remove(),220);},3200);
+}
+
+// --- generic confirm dialog ---
+let confirmCb=null,confirmGate='';
+// confirmDialog(title, msg, okLabel, cb, gateName)
+// Passing gateName requires the user to type that exact name before the action
+// unlocks. Used for irreversible deletes, where a mis-aimed click on a row of
+// buttons is otherwise indistinguishable from intent.
+function confirmDialog(title,msg,okLabel,cb,gateName){
+  $('confirm-title').textContent=title;
+  $('confirm-msg').textContent=msg;
+  $('confirm-ok').textContent=okLabel||'确认';
+  confirmCb=cb;
+  confirmGate=gateName||'';
+  const gate=$('confirm-gate'), input=$('confirm-gate-input'), ok=$('confirm-ok');
+  if(confirmGate){
+    $('confirm-gate-name').textContent=confirmGate;
+    input.value='';
+    gate.classList.remove('hidden');
+    ok.disabled=true;
+    setTimeout(()=>input.focus(),50);
+  }else{
+    gate.classList.add('hidden');
+    ok.disabled=false;
+  }
+  $('confirm-modal').classList.remove('hidden');
+}
+function closeConfirm(){
+  $('confirm-modal').classList.add('hidden');
+  confirmCb=null;confirmGate='';
+  $('confirm-ok').disabled=false;
+  $('confirm-gate').classList.add('hidden');
+}
+$('confirm-gate-input').addEventListener('input',e=>{
+  $('confirm-ok').disabled = e.target.value.trim()!==confirmGate;
+});
+$('confirm-gate-input').addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&!$('confirm-ok').disabled)$('confirm-ok').click();
+});
+$('confirm-ok').addEventListener('click',()=>{
+  if($('confirm-ok').disabled)return;
+  const cb=confirmCb;closeConfirm();if(cb)cb();
+});
+
+// --- skeleton rows for table loading ---
+function skelRows(cols,n){
+  n=n||3;
+  let out='';
+  for(let i=0;i<n;i++){
+    out+='<tr class="skel-row">';
+    for(let c=0;c<cols;c++){
+      const w=40+((i*37+c*61)%55); // varied widths look more natural
+      out+=`<td><span class="skel" style="width:${w}%;"></span></td>`;
+    }
+    out+='</tr>';
+  }
+  return out;
+}
+
+// --- API base: works mounted under any subpath (e.g. /admin) ---
+const API_BASE=(function(){
+  let p=location.pathname;
+  if(p.endsWith('/'))p=p.slice(0,-1);
+  if(p.endsWith('/index.html'))p=p.slice(0,-'/index.html'.length);
+  return p;
+})();
+function tok(){return localStorage.getItem('llmproxy_jwt')||'';}
+async function j(u,o){
+  o=o||{};o.headers=o.headers||{};
+  if(tok())o.headers['Authorization']='Bearer '+tok();
+  const r=await fetch(API_BASE+u,o);
+  if(r.status===401){logoutLocal();throw new Error('unauthorized');}
+  return r.json();
+}
+
+// --- theme ---
+function applyTheme(t){
+  document.documentElement.setAttribute('data-theme',t);
+  const tb=$('theme-btn').querySelector('[data-icon]');
+  if(tb){tb.setAttribute('data-icon',t==='dark'?'sun':'moon');injectIcons(tb);}
+  $('theme-txt').textContent = t==='dark' ? '亮色模式' : '暗色模式';
+}
+function toggleTheme(){
+  const cur=document.documentElement.getAttribute('data-theme')==='dark'?'dark':'light';
+  const next=cur==='dark'?'light':'dark';
+  localStorage.setItem('llmproxy_theme',next);applyTheme(next);
+}
+(function initTheme(){
+  const saved=localStorage.getItem('llmproxy_theme');
+  let t;
+  if(saved){
+    t=saved; // explicit user choice always wins
+  }else{
+    // first visit: follow the OS preference, defaulting to light
+    t=(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';
+  }
+  applyTheme(t);
+  // live-follow the OS while the user has not made an explicit choice
+  if(!saved && window.matchMedia){
+    const mq=window.matchMedia('(prefers-color-scheme: dark)');
+    const onChange=e=>{ if(!localStorage.getItem('llmproxy_theme')) applyTheme(e.matches?'dark':'light'); };
+    if(mq.addEventListener)mq.addEventListener('change',onChange);
+    else if(mq.addListener)mq.addListener(onChange); // Safari <14
+  }
+})();
+
+// --- auth / login ---
+function showLogin(){$('login').classList.remove('hidden');$('app').classList.add('hidden');}
+function showApp(){$('login').classList.add('hidden');$('app').classList.remove('hidden');boot();}
+function logoutLocal(){localStorage.removeItem('llmproxy_jwt');localStorage.removeItem('llmproxy_role');localStorage.removeItem('llmproxy_user');showLogin();}
+function doLogout(){logoutLocal();}
+// role helpers: viewers get a read-only panel
+function curRole(){return localStorage.getItem('llmproxy_role')||'admin';}
+function isAdmin(){return curRole()==='admin';}
+function applyRole(){
+  const admin=isAdmin();
+  // hide write-only controls from viewers
+  document.querySelectorAll('[data-admin-only]').forEach(el=>{
+    el.style.display=admin?'':'none';
+  });
+  // show the user-management nav entry only to admins
+  const userNav=$('nav-users');
+  if(userNav)userNav.style.display=admin?'':'none';
+  // badge in the sidebar footer
+  const badge=$('role-badge');
+  if(badge){
+    badge.textContent=admin?'管理员':'只读';
+    badge.className='role-badge '+(admin?'admin':'viewer');
+  }
+  const who=$('who-name');
+  if(who)who.textContent=localStorage.getItem('llmproxy_user')||'';
+  // viewers get a read-only banner on the config page
+  const note=$('readonly-note');
+  if(note)note.style.display=admin?'none':'flex';
+}
+async function doLogin(){
+  $('login-msg').textContent='';
+  const body={username:$('login-user').value,password:$('login-pass').value};
+  try{
+    const r=await fetch(API_BASE+'/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const d=await r.json();
+    if(!r.ok){$('login-msg').textContent=d.error||'登录失败';return;}
+    localStorage.setItem('llmproxy_jwt',d.token);
+    localStorage.setItem('llmproxy_role',d.role||'admin');
+    localStorage.setItem('llmproxy_user',d.username||'');
+    showApp();
+  }catch(e){$('login-msg').textContent='网络错误';}
+}
+
+// --- change password (own account only; identity comes from the JWT) ---
+function openPwd(){
+  $('pwd-modal').classList.remove('hidden');
+  $('pwd-who').textContent=localStorage.getItem('llmproxy_user')||'当前账号';
+  $('pwd-old').value='';$('pwd-new').value='';$('pwd-msg').textContent='';
+}
+function closePwd(){$('pwd-modal').classList.add('hidden');}
+async function savePwd(){
+  const body={old_password:$('pwd-old').value,new_password:$('pwd-new').value};
+  const res=await j('/api/password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(res&&res.error){$('pwd-msg').className='msg err';$('pwd-msg').textContent=res.error;return;}
+  $('pwd-msg').className='msg';$('pwd-msg').textContent='已修改，请重新登录';
+  setTimeout(()=>{closePwd();logoutLocal();},1200);
+}
+
+// --- tabs with hash persistence ---
+const TITLES={overview:'总览',config:'配置管理',keys:'客户端 Key',monitor:'监控日志',stats:'统计报表',users:'账号管理'};
+let currentTab='config';
+const ADMIN_TABS={keys:1,users:1};
+function tab(name){
+  // Admin-only sections must not render for viewers, including when the tab is
+  // reached directly through the URL hash on load.
+  if(ADMIN_TABS[name]&&!isAdmin())name='overview';
+  currentTab=name;
+  const mt=$('mtop-title'); if(mt)mt.textContent=TITLES[name]||'总览';
+  document.querySelectorAll('.nav-item[data-tab]').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));
+  document.querySelectorAll('#app main>section').forEach(s=>s.classList.toggle('hidden',s.id!=='tab-'+name));
+  if(location.hash!=='#'+name)location.hash=name;
+  if(name==='keys')reloadKeys();
+  if(name==='monitor')refreshCalls();
+  if(name==='stats')refreshStats();
+  if(name==='users')reloadUsers();
+  if(name==='overview')loadOverview();
+}
+document.querySelector('.sidebar').addEventListener('click',e=>{
+  const b=e.target.closest('.nav-item[data-tab]');
+  if(b){tab(b.dataset.tab); if(window.innerWidth<=860)toggleSidebar(false);}
+});
+function toggleSidebar(force){
+  const sb=document.querySelector('.sidebar'), bd=document.querySelector('.sidebar-backdrop');
+  if(!sb)return;
+  const open = (force===undefined) ? !sb.classList.contains('open') : !!force;
+  sb.classList.toggle('open',open);
+  if(bd)bd.classList.toggle('open',open);
+  document.body.classList.toggle('no-scroll',open);
+}
+window.addEventListener('hashchange',()=>{const n=location.hash.slice(1);if(n&&$('tab-'+n))tab(n);});
+
+// --- config / upstreams ---
+async function reloadConfig(){
+  $('upstreams').innerHTML=skelRows(8,2);
+  const [u,c,healthRes]=await Promise.all([j('/api/upstreams'),j('/api/config'),j('/api/health?n=200')]);
+  $('upstreams-count').textContent=`共 ${u.length} 个上游`;
+  // per-upstream health computed server-side
+  const health=(healthRes&&healthRes.upstreams)||{};
+  const brk=(healthRes&&healthRes.breakers)||{};
+  // Order rows the way the proxy actually tries them: enabled upstreams first
+  // (higher priority first, name breaks ties -- same rule the picker uses for a
+  // tier), disabled ones after, and a breaker-open upstream pushed below its own
+  // tier since the picker deprioritises it live. This turns "priority number"
+  // and "breaker badge" into one visible thing -- position -- instead of two
+  // disconnected labels the reader has to reconcile themselves.
+  const groups=[
+    {proto:'openai',label:'OpenAI 协议',items:u.filter(x=>x.protocol==='openai')},
+    {proto:'anthropic',label:'Anthropic 协议',items:u.filter(x=>x.protocol==='anthropic')},
+  ];
+  let html='';
+  groups.forEach(g=>{
+    if(!g.items.length)return; // hide empty protocol groups
+    const ordered=g.items.slice().sort((a,b)=>{
+      if(a.enabled!==b.enabled)return a.enabled?-1:1;
+      const aOpen=!!(brk[a.name]&&brk[a.name].open), bOpen=!!(brk[b.name]&&brk[b.name].open);
+      if(aOpen!==bOpen)return aOpen?1:-1;
+      if((b.priority||0)!==(a.priority||0))return (b.priority||0)-(a.priority||0);
+      return a.name.localeCompare(b.name);
+    });
+    html+=`<tr class="group-row"><td colspan="8">
+      <span class="group-tag ${g.proto}">${g.label}</span>
+      <span class="group-count">${g.items.length} 个上游 · 按实际调用顺序排列</span>
+    </td></tr>`;
+    let rank=0;
+    ordered.forEach(x=>{
+      const h=health[x.name];
+      const cell = h && h.total>0
+        ? healthCell(h)
+        : '<span class="h-txt" style="color:var(--dim);">暂无调用</span>';
+      const open=brk[x.name]&&brk[x.name].open;
+      rank++;
+      const rankCell=x.enabled
+        ? `<span class="up-rank" title="在此协议组内的调用顺序">${rank}</span>`
+        : `<span class="up-rank up-rank-off" title="已停用，不参与调用">—</span>`;
+      html+=`<tr class="${open?'up-row-broken':''}">
+    <td>${rankCell}</td>
+    <td style="font-weight:500;">${esc(x.name)}${open?`<span class="tag off" style="margin-left:6px;" title="连续失败 ${brk[x.name].fail_streak} 次，暂时降级 ${brk[x.name].open_for_sec}s 后重试">熔断 ${brk[x.name].open_for_sec}s</span>`:''}</td>
+    <td><span class="prio">${x.priority||0}</span></td>
+    <td class="mono truncate" title="${esc(x.base_url)}">${esc(x.base_url)}</td>
+    <td class="mono">${esc(x.api_key)}</td>
+    <td>${cell}</td>
+    <td><span class="tag ${x.enabled?'on':'off'}">${x.enabled?'启用':'停用'}</span></td>
+    <td class="row" style="flex-wrap:nowrap;">${
+      isAdmin()
+      ? `<button class="btn ghost sm" onclick="editUp('${esc(x.name)}')">编辑</button>
+      <button class="btn ghost sm" onclick="toggleUp('${esc(x.name)}',${!x.enabled})">${x.enabled?'停用':'启用'}</button>
+      <button class="btn ghost sm" onclick="testUp('${esc(x.name)}','${x.protocol}')">测试</button>
+      <button class="btn danger sm" onclick="delUp('${esc(x.name)}')">删除</button>`
+      : '<span class="h-txt">只读</span>'
+    }</td></tr>`;
+    });
+  });
+  $('upstreams').innerHTML=html||emptyState('bolt','还没有上游','配置一个或多个上游模型提供商，代理将自动在它们之间做故障转移','＋ 新增上游','openUpModal()');
+  $('p-max').value=c.retry.max_attempts;
+  $('p-base').value=c.retry.base_delay_ms;
+  $('p-cap').value=c.retry.max_delay_ms;
+  $('p-rot').value=c.failover.max_rotations;
+  $('p-timeout').value=c.retry.total_timeout_sec||0;
+  lastUpstreamCount=(u||[]).filter(x=>x.enabled).length||1;
+  updatePolicyPreview();
+  loadAlert();
+}
+
+// --- status tokens (unified design system) ---
+function httpType(code){
+  if(!code)return 'muted';
+  if(code<300)return 'ok';
+  if(code<400)return 'info';
+  if(code<500)return 'warn';     // 4xx / 429 -> client / rate-limit
+  return 'err';                  // 5xx -> upstream error
+}
+function statusDot(type){return `<span class="dot ${type||'muted'}"></span>`;}
+function badge(text,type,opts){
+  opts=opts||{};
+  const dot=opts.dot===false?'':statusDot(type);
+  return `<span class="badge ${type||'muted'}">${dot}${esc(text)}</span>`;
+}
+
+// healthCell renders the health column from the server-computed payload.
+// Fields come from /api/health: total, ok, failed, rate (0-100), avg_ms, last_err.
+function healthCell(h){
+  const rate=h.rate||0;
+  const avg=h.avg_ms||0;
+  const cls=rate>=95?'':rate>=80?'warn':'bad';
+  const dotCls=rate>=95?'ok':rate>=80?'warn':'err';
+  const color=rate>=95?'var(--ok)':rate>=80?'var(--warn)':'var(--err)';
+  const avgTxt=avg>=1000?(avg/1000).toFixed(2)+'s':avg+'ms';
+  return `<div class="health">
+    ${statusDot(dotCls)}
+    <div class="h-bar"><div class="h-fill ${cls}" style="width:${rate}%"></div></div>
+    <span class="h-txt" style="color:${color};">${rate.toFixed(0)}%</span>
+    <span class="h-txt" title="平均耗时">${avgTxt}</span>
+    ${h.last_err?`<span class="h-err" title="${esc(h.last_err)}">${esc(h.last_err)}</span>`:''}
+  </div>`;
+}
+// --- upstream modal ---
+let lastUpstreamCount=1;
+const editCache={};
+function openUpModal(){
+  $('up-modal-title').textContent='新增上游';
+  ['u-name','u-base','u-key'].forEach(id=>$(id).value='');
+  $('u-priority').value='0';
+  $('u-protocol').value='openai';
+  $('u-name').disabled=false;
+  $('u-key').placeholder='sk-... 或完整 key';
+  $('up-modal-msg').textContent='';
+  $('up-modal').classList.remove('hidden');
+}
+function closeUpModal(){$('up-modal').classList.add('hidden');}
+function editUp(name){
+  const fill=x=>{
+    $('up-modal-title').textContent='编辑上游';
+    $('u-name').value=x.name;$('u-name').disabled=true; // name is the identity key
+    $('u-protocol').value=x.protocol;$('u-base').value=x.base_url;$('u-key').value='';
+    $('u-priority').value=x.priority||0;
+    $('u-key').placeholder='留空则不修改（当前 '+x.api_key+'）';
+    $('up-modal-msg').textContent='';
+    $('up-modal').classList.remove('hidden');
+  };
+  const cached=editCache[name];
+  if(cached){fill(cached);return;}
+  j('/api/upstreams').then(list=>{const x=list.find(v=>v.name===name);editCache[name]=x;fill(x);});
+}
+async function addUpstream(){
+  const body={name:$('u-name').value.trim(),protocol:$('u-protocol').value,base_url:$('u-base').value.trim(),api_key:$('u-key').value.trim(),priority:+$('u-priority').value||0,enabled:true};
+  $('up-modal-msg').textContent='';
+  if(!body.name||!body.base_url){$('up-modal-msg').textContent='名称和 Base URL 必填';return;}
+  let res;
+  if(editCache[body.name]||$('u-name').disabled){
+    delete editCache[body.name];
+    res=await j('/api/upstreams/update',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  }else{
+    if(!body.api_key){$('up-modal-msg').textContent='新增上游必须填写完整 API Key';return;}
+    res=await j('/api/upstreams/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  }
+  if(res&&res.error){$('up-modal-msg').textContent='保存失败：'+res.error;return;}
+  closeUpModal();
+  toast('上游已保存','ok');
+  reloadConfig();
+}
+async function toggleUp(n,en){
+  const res=await j('/api/upstreams/update',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n,enabled:en})});
+  if(res&&res.error){toast(res.error,'err');return;}
+  toast(en?`已启用「${n}」`:`已停用「${n}」`,'ok');
+  reloadConfig();
+}
+async function delUp(n){
+  confirmDialog('删除上游',`该上游将立即退出故障转移，流量转由其余上游承担。历史调用记录保留。`,'永久删除',async()=>{
+    const res=await j('/api/upstreams/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n})});
+    if(res&&res.error){toast(res.error,'err');return;}
+    toast(`已删除「${n}」`,'ok');
+    reloadConfig();
+  },n);
+}
+// updatePolicyPreview derives the worst-case latency from the current form values
+// and flags combinations that contradict each other. Showing the resulting number
+// is far more legible than asking the user to reason about four separate knobs --
+// e.g. "10 attempts" and "8s budget" look fine individually but the later
+// attempts can never run.
+function updatePolicyPreview(){
+  const box=$('policy-preview'); if(!box)return;
+  const attempts=Math.max(1,+$('p-max').value||1);
+  const base=Math.max(0,+$('p-base').value||0);
+  const cap=Math.max(0,+$('p-cap').value||0);
+  const rot=Math.max(0,+$('p-rot').value||0);
+  const budget=Math.max(0,+$('p-timeout').value||0);
+  const upstreams=(lastUpstreamCount||1);
+
+  // Backoff waits inside one upstream: base, 2*base, 4*base ... capped.
+  let perUpstream=0;
+  for(let i=0;i<attempts-1;i++){
+    const d=Math.min(base*Math.pow(2,i), cap>0?cap:Infinity);
+    perUpstream+=isFinite(d)?d:0;
+  }
+  // How many upstreams a single request may touch.
+  const tried=rot>0?Math.min(rot+1,upstreams):upstreams;
+  const totalWait=perUpstream*tried;
+
+  const fmtSec=ms=>ms>=1000?(ms/1000).toFixed(1)+'s':Math.round(ms)+'ms';
+  let html=`<div class="pv-row"><span class="pv-l">最坏情况退避累计</span><span class="pv-v">${fmtSec(totalWait)}</span></div>`;
+  html+=`<div class="pv-row"><span class="pv-l">最多尝试</span><span class="pv-v">${tried} 个上游 × ${attempts} 次 = ${tried*attempts} 次请求</span></div>`;
+  html+=`<div class="pv-row"><span class="pv-l">总超时闸门</span><span class="pv-v">${budget>0?budget+'s':'不限制'}</span></div>`;
+
+  const warns=[];
+  if(budget>0 && totalWait>=budget*1000){
+    warns.push(`退避累计 ${fmtSec(totalWait)} 已超过 ${budget}s 的总超时，靠后的重试永远不会执行。`);
+  }
+  if(budget===0){
+    warns.push('未设总超时：上游长时间不可用时，单个请求可能远超调用方自己的超时时间。');
+  }
+  if(cap>0 && cap<base){
+    warns.push('退避上限小于基础退避，上限会直接生效、递增无效。');
+  }
+  if(rot>0 && rot+1<upstreams){
+    warns.push(`当前有 ${upstreams} 个上游，但最多只会尝试 ${tried} 个，其余不会被使用。`);
+  }
+  if(warns.length){
+    html+='<div class="pv-warn">'+warns.map(w=>`<div>· ${w}</div>`).join('')+'</div>';
+  }
+  box.innerHTML=html;
+}
+
+async function savePolicy(){
+  const body={retry:{max_attempts:+$('p-max').value,base_delay_ms:+$('p-base').value,max_delay_ms:+$('p-cap').value,total_timeout_sec:+$('p-timeout').value||0,retry_on_429:true,retry_on_5xx:true,retry_on_timeout:true},failover:{mode:'round_robin',skip_unhealthy:true,max_rotations:+$('p-rot').value}};
+  await j('/api/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  toast('策略已保存','ok');
+}
+
+// --- webhook alerting ---
+let alertEnabled=false;
+function renderAlertToggle(){
+  const btn=$('alert-toggle');
+  if(!btn)return;
+  btn.textContent=alertEnabled?'已启用':'未启用';
+  btn.classList.toggle('on',alertEnabled);
+}
+function toggleAlert(){
+  alertEnabled=!alertEnabled;
+  renderAlertToggle();
+}
+async function loadAlert(){
+  try{
+    const a=await j('/api/alert');
+    alertEnabled=!!a.enabled;
+    $('a-url').value=a.url||'';
+    $('a-streak').value=a.fail_streak||3;
+    $('a-cool').value=a.cooldown_sec||600;
+    renderAlertToggle();
+  }catch(e){/* endpoint may be unavailable on older builds */}
+}
+async function saveAlert(){
+  const body={
+    url:$('a-url').value.trim(),
+    enabled:alertEnabled,
+    fail_streak:+$('a-streak').value||3,
+    cooldown_sec:+$('a-cool').value||600,
+  };
+  if(body.enabled&&!body.url){toast('启用告警时必须填写 Webhook URL','err');return;}
+  const res=await j('/api/alert',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(res&&res.error){toast(res.error,'err');return;}
+  toast(body.enabled?'告警已启用':'告警已关闭','ok');
+}
+async function testAlert(){
+  const url=$('a-url').value.trim();
+  if(!url){toast('请先填写 Webhook URL','err');return;}
+  // send a sample payload from the browser directly (no server round-trip needed)
+  const content=`### LLM Proxy 测试告警\n> 这是一条测试消息，用于验证 Webhook 配置是否正确。\n> **时间**：${new Date().toLocaleString()}`;
+  try{
+    const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({msgtype:'markdown',markdown:{content,title:'LLM Proxy 测试告警',text:content}})});
+    toast(r.ok?'测试告警已发送':'发送失败（HTTP '+r.status+'）',r.ok?'ok':'err');
+  }catch(e){
+    toast('发送失败：'+e.message+'（跨域可能被浏览器拦截，以实际告警为准）','err');
+  }
+}
+
+// --- upstream connectivity test ---
+function closeTestModal(){$('test-modal').classList.add('hidden');}
+async function testUp(name,proto){
+  $('test-up').textContent=name;
+  $('test-proto').textContent=proto;
+  $('test-dot').style.background='var(--dim)';
+  $('test-duration').textContent='测试中…';
+  $('test-body').textContent='正在向该上游发送一条最小 chat 请求…';
+  $('test-modal').classList.remove('hidden');
+  const t0=performance.now();
+  // minimal request body per protocol
+  let body;
+  if(proto==='anthropic'){
+    body=JSON.stringify({model:"claude-sonnet-4-20250514",messages:[{role:"user",content:"hi"}],max_tokens:20,stream_options:{include_usage:true}});
+  }else{
+    body=JSON.stringify({model:"gpt-4o-mini",messages:[{role:"user",content:"hi"}],max_tokens:20,stream_options:{include_usage:true}});
+  }
+  try{
+    const r=await fetch(API_BASE+'/api/test',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','X-LLMPROXY-Upstream':name,'X-LLMPROXY-Protocol':proto,'Authorization':'Bearer '+tok()},
+      body
+    });
+    const dur=Math.round(performance.now()-t0);
+    $('test-duration').textContent=`耗时 ${dur}ms · 状态 ${r.status}`;
+    $('test-dot').style.background = r.ok ? 'var(--ok)' : 'var(--err)';
+    const data=await r.text();
+    let out;
+    try{out=JSON.stringify(JSON.parse(data),null,2);}catch(e){out=data;}
+    if(out.length>15000)out=out.slice(0,15000)+'\n… [截断]';
+    $('test-body').textContent=out;
+  }catch(e){
+    $('test-dot').style.background='var(--err)';
+    $('test-duration').textContent='连接失败';
+    $('test-body').textContent='网络错误：'+e.message;
+  }
+}
+
+// --- client keys ---
+const keyEditCache={};
+function fmtExp(ts){if(!ts)return'永不';const d=new Date(ts*1000);return d.toLocaleString();}
+function maskKey(k){k=String(k);if(k.length<=12)return k.slice(0,2)+'…'+k.slice(-2);return k.slice(0,6)+'…'+k.slice(-4);}
+function toggleKeyView(btn){
+  const cell=btn.closest('td');const span=cell.querySelector('.keyval');const full=span.dataset.key;
+  if(span.dataset.shown==='1'){span.textContent=maskKey(full);span.dataset.shown='0';btn.textContent='显示';}
+  else{span.textContent=full;span.dataset.shown='1';btn.textContent='隐藏';}
+}
+async function copyKey(btn){
+  const cell=btn.closest('td');const full=cell.querySelector('.keyval').dataset.key;
+  try{await navigator.clipboard.writeText(full);}
+  catch(e){const t=document.createElement('textarea');t.value=full;document.body.appendChild(t);t.select();document.execCommand('copy');t.remove();}
+  const old=btn.textContent;btn.textContent='已复制';setTimeout(()=>btn.textContent=old,1200);
+}
+async function reloadKeys(){
+  $('clientkeys').innerHTML=skelRows(7,2);
+  const ksRaw=await j('/api/clientkeys');
+  const ks=applySort(ksRaw||[],'keys');
+  $('clientkeys-count').textContent=`共 ${(ks||[]).length} 个 Key`;
+  const html=(ks||[]).map(x=>{
+    const now=Date.now()/1000;
+    const overQuota = x.enabled && x.token_quota && (x.used_tokens||0)/x.token_quota>=1;
+    const warnQuota = x.enabled && x.token_quota && (x.used_tokens||0)/x.token_quota>=0.8 && (x.used_tokens||0)/x.token_quota<1;
+    const expWarn   = x.enabled && x.expires_at && (x.expires_at-now)<3*86400 && (x.expires_at-now)>0;
+    const expOver   = x.enabled && x.expires_at && x.expires_at<=now;
+    let kb='';
+    if(overQuota) kb=badge('超额','err');
+    else if(expOver) kb=badge('已过期','err');
+    else if(warnQuota) kb=badge('预警','warn');
+    else if(expWarn) kb=badge('临期','warn');
+    return `<tr>
+      <td style="font-weight:500;">${kb?`<span style="margin-right:6px;">${kb}</span>`:''}${esc(x.name)}</td>
+      <td><span class="mono keyval" data-key="${esc(x.key)}" data-shown="0">${esc(maskKey(x.key))}</span>
+        <button class="btn ghost keybtn" onclick="toggleKeyView(this)">显示</button>
+        <button class="btn ghost keybtn" onclick="copyKey(this)">复制</button></td>
+      <td>${fmtExp(x.expires_at)}</td>
+      <td>${x.token_quota?fmtNum(x.token_quota):'无限'}</td>
+      <td>${quotaBar(x.used_tokens||0,x.token_quota)}</td>
+      <td>${badge(x.enabled?'启用':'停用', x.enabled?'ok':'muted')}</td>
+      <td class="row" style="flex-wrap:nowrap;">${
+        isAdmin()
+        ? `<button class="btn ghost sm" onclick="editKey('${esc(x.name)}')">编辑</button>
+        <button class="btn ghost sm" onclick="toggleKey('${esc(x.name)}',${!x.enabled})">${x.enabled?'停用':'启用'}</button>
+        <button class="btn ghost sm" onclick="resetKey('${esc(x.name)}')">重置用量</button>
+        <button class="btn danger sm" onclick="delKey('${esc(x.name)}')">删除</button>`
+        : '<span class="h-txt">只读</span>'
+      }</td></tr>`;
+  }).join('')||emptyState('key','还没有客户端 Key','给调用代理的应用签发凭据，支持到期时间与 token 额度控制','＋ 签发新 Key','openKeyModal()');
+  $('clientkeys').innerHTML = html;
+  syncSortHeaders('keys');
+  renderKeyBanner(ks||[]);
+}
+
+function renderKeyBanner(ks){
+  const now=Date.now()/1000;
+  const warn=[];
+  ks.forEach(x=>{
+    if(!x.enabled)return;
+    if(x.token_quota && (x.used_tokens||0)/x.token_quota>=1){
+      warn.push(`${x.name} 已超出额度（${fmtNum(x.used_tokens||0)} / ${fmtNum(x.token_quota)}）`);
+    } else if(x.token_quota && (x.used_tokens||0)/x.token_quota>=0.8){
+      warn.push(`${x.name} 额度接近上限（${fmtNum(x.used_tokens||0)} / ${fmtNum(x.token_quota)}）`);
+    }
+    if(x.expires_at){
+      const days=(x.expires_at-now)/86400;
+      if(days<0){
+        warn.push(`${x.name} 已过期`);
+      } else if(days<3){
+        warn.push(`${x.name} 将于 ${new Date(x.expires_at*1000).toLocaleDateString()} 到期`);
+      }
+    }
+  });
+  const banner=$('key-banner');
+  if(warn.length){
+    banner.innerHTML=`<span class="banner-ico">${icon('alert')}</span>
+      <span class="banner-text">有 <span class="kv">${warn.length}</span> 个 Key 需要关注：${warn.map(t=>esc(t)).join('；')}</span>
+      <button class="banner-dismiss" onclick="this.parentElement.classList.add('hidden')">${icon('close')}</button>`;
+    banner.classList.remove('hidden','ok');
+  } else if(ks.length){
+    banner.innerHTML=`<span class="banner-ico">${icon('check')}</span>
+      <span class="banner-text">所有 Key 状态正常</span>
+      <button class="banner-dismiss" onclick="this.parentElement.classList.add('hidden')">${icon('close')}</button>`;
+    banner.classList.remove('hidden');
+    banner.classList.add('ok');
+  } else {
+    banner.classList.add('hidden');
+  }
+}
+function genKey(){
+  const arr=new Uint8Array(24);crypto.getRandomValues(arr);
+  $('k-key').value='sk-'+Array.from(arr,b=>b.toString(16).padStart(2,'0')).join('');
+}
+function toUnix(local){if(!local)return 0;return Math.floor(new Date(local).getTime()/1000);}
+// --- client key modal ---
+function openKeyModal(){
+  $('key-modal-title').textContent='签发新 Key';
+  ['k-name','k-key','k-exp'].forEach(id=>$(id).value='');
+  $('k-quota').value=0;
+  $('k-name').disabled=false;
+  $('k-key').placeholder='自定义一串强随机字符串';
+  $('key-modal-msg').textContent='';
+  $('key-form-wrap').style.display='';
+  $('key-result').classList.remove('show');
+  $('key-modal').classList.remove('hidden');
+}
+function closeKeyModal(){
+  $('key-modal').classList.add('hidden');
+  $('key-form-wrap').style.display='';
+  $('key-result').classList.remove('show');
+  $('key-modal-title').textContent='签发新 Key';
+}
+function editKey(name){
+  j('/api/clientkeys').then(list=>{
+    const x=list.find(v=>v.name===name);keyEditCache[name]=x;
+    $('key-modal-title').textContent='编辑 Key';
+    $('k-name').value=x.name;$('k-name').disabled=true;
+    $('k-key').value='';$('k-key').placeholder='留空则不修改（当前 '+maskKey(x.key)+'）';
+    $('k-quota').value=x.token_quota||0;
+    $('k-exp').value = x.expires_at ? new Date(x.expires_at*1000).toISOString().slice(0,16) : '';
+    $('key-modal-msg').textContent='';
+    $('key-modal').classList.remove('hidden');
+  });
+}
+async function addKey(){
+  const body={name:$('k-name').value.trim(),key:$('k-key').value.trim(),expires_at:toUnix($('k-exp').value),token_quota:+$('k-quota').value,enabled:true};
+  $('key-modal-msg').textContent='';
+  if(!body.name){$('key-modal-msg').textContent='名称必填';return;}
+  const isEdit=!!(keyEditCache[body.name]||$('k-name').disabled);
+  let res;
+  if(isEdit){
+    delete keyEditCache[body.name];
+    res=await j('/api/clientkeys/update',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  }else{
+    if(!body.key){$('key-modal-msg').textContent='必须填写 API Key（不允许为空）';return;}
+    res=await j('/api/clientkeys/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  }
+  if(res&&res.error){$('key-modal-msg').textContent=res.error;return;}
+  if(!isEdit){
+    showKeyResult(body.name, body.key);
+  } else {
+    closeKeyModal();
+    toast('Key 已保存','ok');
+    reloadKeys();
+  }
+}
+// after a fresh key is created, show the key + a ready-to-run curl snippet
+function showKeyResult(name,key){
+  const base=location.origin+API_BASE;
+  const curl=
+`curl ${base}/v1/chat/completions \\
+  -H "Authorization: Bearer ${key}" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "gpt-4o-mini",
+    "messages": [{"role":"user","content":"Hello"}]
+  }'`;
+  $('kr-name').textContent=name;
+  $('kr-key-val').textContent=key;
+  $('kr-curl').textContent=curl;
+  $('key-modal-title').textContent='Key 已签发';
+  $('key-form-wrap').style.display='none';
+  $('key-result').classList.add('show');
+  $('key-modal').classList.remove('hidden');
+}
+function finishKeyResult(){
+  closeKeyModal();
+  reloadKeys();
+}
+async function toggleKey(n,en){
+  const res=await j('/api/clientkeys/update',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n,enabled:en})});
+  if(res&&res.error){toast(res.error,'err');return;}
+  toast(en?`已启用「${n}」`:`已停用「${n}」`,'ok');
+  reloadKeys();
+}
+async function delKey(n){
+  confirmDialog('删除客户端 Key',`使用该 Key 的应用将立即收到 401 而无法调用，且 Key 无法找回。`,'永久删除',async()=>{
+    const res=await j('/api/clientkeys/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n})});
+    if(res&&res.error){toast(res.error,'err');return;}
+    toast(`已删除「${n}」`,'ok');
+    reloadKeys();
+  },n);
+}
+async function resetKey(n){
+  confirmDialog('重置用量',`确定将「${n}」的已用 token 计数清零吗？`,'重置',async()=>{
+    const res=await j('/api/clientkeys/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n})});
+    if(res&&res.error){toast(res.error,'err');return;}
+    toast(`已重置「${n}」的用量`,'ok');
+    reloadKeys();
+  });
+}
+
+// --- monitor ---
+
+// monitor auto-refresh with pause-on-hover
+let monitorPausing=false;
+let callData=[];      // filtered + sorted full set, source for paging/CSV
+let callPage=1;
+let callPageSize=25;
+function refreshCalls(){
+  if(monitorPausing){
+    const dot=$('refresh-dot');
+    if(dot){dot.classList.add('paused');if(dot.dataset.pending!=='1'){dot.dataset.pending='1';}}
+    return;
+  }
+  refreshCallsData();
+}
+async function refreshCallsData(){
+  const tbl=$('calls');
+  if(!tbl.dataset.filled){
+    tbl.innerHTML=skelRows(15,3);
+  }
+  const raw=await j('/api/calls?n=200');
+  tbl.dataset.filled='1';
+  const all=raw.slice().reverse();
+  const fRoute=$('f-route')?.value||'';
+  const fUp=$('f-upstream')?.value||'';
+  const fStatus=$('f-status')?.value||'';
+  const fKey=$('f-key')?.value||'';
+  const items=all.filter(x=>{
+    if(fRoute&&!x.router.startsWith(fRoute))return false;
+    if(fUp&&x.upstream!==fUp)return false;
+    if(fStatus&&String(x.status_code)!==fStatus)return false;
+    if(fKey){const ck=x.client_key||'(开放)';if(ck!==fKey)return false;}
+    return true;
+  });
+  callData=applySort(items,'calls');
+  renderCallsPage();
+  populateFilters(all);
+  const dot=$('refresh-dot');
+  if(dot){dot.classList.remove('paused');delete dot.dataset.pending;}
+}
+
+function populateFilters(list){
+  fillSelect('f-route',[...new Set(list.map(x=>x.router))].sort());
+  fillSelect('f-upstream',[...new Set(list.map(x=>x.upstream))].sort());
+  fillSelect('f-key',[...new Set(list.map(x=>x.client_key||'(开放)'))].sort());
+  fillSelect('f-status',[...new Set(list.map(x=>String(x.status_code)))].sort());
+}
+function fillSelect(id,vals){
+  const sel=$(''+id); if(!sel)return;
+  const cur=sel.value;
+  sel.innerHTML='<option value="">全部</option>'+vals.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join('');
+  sel.value=cur && vals.includes(cur)?cur:'';
+}
+
+
+// render the current page of callData into the monitor table
+function renderCallsPage(){
+  const tbl=$('calls'); if(!tbl)return;
+  const total=callData.length;
+  const ps=callPageSize>0?callPageSize:Infinity;
+  const pages=Math.max(1,Math.ceil(total/ps));
+  if(callPage>pages)callPage=pages;
+  if(callPage<1)callPage=1;
+  const start=(callPage-1)*(ps===Infinity?0:ps);
+  const slice=ps===Infinity?callData:callData.slice(start,start+ps);
+  const rows=slice.map((x,pi)=>{
+    const gi=start+pi;
+    const up=x.upstream||'-';
+    const tot=x.total_tokens||((x.prompt_tokens||0)+(x.completion_tokens||0));
+    // Surface retry/failover only when it actually happened -- the common case is
+    // 1 attempt with no switch, and printing that on every row is just noise.
+    const retryHint=(x.attempts>1||x.failovers>0)
+      ? `<span class="retry-hint" title="尝试 ${x.attempts} 次，切换 ${x.failovers} 次">↻${x.attempts}${x.failovers>0?'·⇄'+x.failovers:''}</span>`
+      : '';
+    return `<tr class="${x.ok?'':'row-err'} call-row" onclick="openTrace(${gi})">
+    <td class="col-expand"><span class="expander" aria-hidden="true">›</span></td>
+    <td class="mono nowrap">${new Date(x.time).toLocaleTimeString()}</td>
+    <td class="mono truncate" title="${esc(x.router||'')}">${esc(x.router)}</td>
+    <td class="truncate" title="${esc(up)}">${esc(up)}</td>
+    <td>${badge(String(x.status_code), httpType(x.status_code))}</td>
+    <td class="num nowrap">${fmtMs(x.duration_ms)}</td>
+    <td class="num nowrap">${tot?fmtNum(tot):'-'}</td>
+    <td class="nowrap">${x.err_type?badge(x.err_type,'err'):(x.ok?badge('成功','ok'):'-')}${retryHint}</td>
+  </tr>`;
+  });
+  tbl.innerHTML=total?rows.join(''):
+    '<tr><td colspan="8" style="color:var(--dim);text-align:center;padding:28px;">'+
+      (tbl.dataset.filled?'筛选后无匹配记录':'暂无调用记录')+
+    '</td></tr>';
+  syncSortHeaders('calls');
+  const info=$('calls-info'); if(info)info.textContent=`共 ${total} 条`+(ps!==Infinity?` · 第 ${callPage}/${pages} 页`:'');
+  const pg=$('calls-page'); if(pg)pg.textContent=`${callPage} / ${pages}`;
+  const pv=$('cp-prev'); if(pv)pv.disabled=callPage<=1;
+  const nx=$('cp-next'); if(nx)nx.disabled=callPage>=pages;
+}
+function setCallPageSize(v){callPageSize=parseInt(v,10)||0;callPage=1;renderCallsPage();}
+function changeCallPage(d){callPage+=d;renderCallsPage();}
+// export the current filtered+sorted calls (callData) to a CSV file
+function exportCallsCSV(){
+  if(!callData.length){toast('没有可导出的记录','err');return;}
+  const cols=[['time','时间'],['router','路由'],['client_key','客户端Key'],['upstream','上游'],['real_model','真实模型'],['provider','提供方'],['prompt_tokens','输入tok'],['completion_tokens','输出tok'],['status_code','状态码'],['ok','成功'],['duration_ms','耗时(ms)'],['attempts','尝试'],['failovers','切换'],['err_type','错误类型'],['err_detail','错误详情'],['client_ip','客户端IP'],['user_agent','UA']];
+  const escC=v=>{const s=String(v==null?'':v);return /[",\n\r]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;};
+  let out=cols.map(c=>c[1]).join(',')+'\r\n';
+  callData.forEach(c=>{
+    out+=cols.map(col=>{
+      let v=c[col[0]];
+      if(col[0]==='time')v=new Date(c.time).toLocaleString();
+      return escC(v);
+    }).join(',')+'\r\n';
+  });
+  const blob=new Blob(['﻿'+out],{type:'text/csv;charset=utf-8'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+  a.download='calls_'+localDay(new Date())+'.csv';
+  document.body.appendChild(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+  toast('已导出 '+callData.length+' 条记录','ok');
+}
+// generic copy helper used by the key result panel and trace drawer
+async function copyText(elOrId,btn){
+  const el=typeof elOrId==='string'?$(elOrId):elOrId; if(!el)return;
+  const txt=el.dataset.copy!=null?el.dataset.copy:el.textContent;
+  try{await navigator.clipboard.writeText(txt);}
+  catch(e){const t=document.createElement('textarea');t.value=txt;document.body.appendChild(t);t.select();document.execCommand('copy');t.remove();}
+  if(btn){const old=btn.textContent;btn.textContent='已复制';setTimeout(()=>btn.textContent=old,1200);}
+}
+// open the right-side trace drawer for a single call (callData index)
+function openTrace(idx){
+  const c=callData[idx]; if(!c)return;
+  const t=httpType(c.status_code);
+  $('trace-dot').className='dot '+t;
+  const chain=buildTraceChain(c);
+  const errBlock=(c.err_type||c.err_detail)?`<div class="trace-sec"><h4>错误信息</h4><div class="trace-err" id="trace-err-${idx}">${esc(c.err_detail||c.err_type||'-')}</div><div class="trace-copy"><button class="btn ghost sm" onclick="copyText('trace-err-${idx}',this)">复制错误</button></div></div>`:'';
+  $('trace-body').innerHTML=`
+    <div class="trace-sec"><h4>状态</h4><div style="display:flex;align-items:center;gap:10px;">${badge(String(c.status_code),t)} ${c.ok?badge('成功','ok'):(c.err_type?badge(c.err_type,'err'):badge('失败','err'))}</div></div>
+    <div class="trace-sec"><h4>基本信息</h4><div class="trace-grid">
+      <div><span class="d-l">时间</span><span class="d-v">${new Date(c.time).toLocaleString()}</span></div>
+      <div><span class="d-l">路由</span><span class="d-v mono">${esc(c.router||'-')}</span></div>
+      <div><span class="d-l">客户端 Key</span><span class="d-v">${esc(c.client_key||'(开放)')}</span></div>
+      <div><span class="d-l">上游</span><span class="d-v">${esc(c.upstream||'-')}</span></div>
+      <div><span class="d-l">上游 Key 指纹</span><span class="d-v mono">${esc(c.key_prefix||'-')}</span></div>
+      <div><span class="d-l">真实模型</span><span class="d-v mono">${esc(c.real_model||'-')}</span></div>
+      <div><span class="d-l">提供方</span><span class="d-v">${esc(c.provider||'-')}</span></div>
+      <div><span class="d-l">耗时</span><span class="d-v">${c.duration_ms}ms</span></div>
+      <div class="trace-full"><span class="d-l">客户端 IP</span><span class="d-v mono">${esc(c.client_ip||'-')}</span></div>
+      <div class="trace-full"><span class="d-l">User-Agent</span><span class="d-v mono">${esc(c.user_agent||'-')}</span></div>
+    </div></div>
+    <div class="trace-sec"><h4>Token 用量</h4><div class="trace-grid">
+      <div><span class="d-l">输入</span><span class="d-v">${fmtNum(c.prompt_tokens||0)}</span></div>
+      <div><span class="d-l">输出</span><span class="d-v">${fmtNum(c.completion_tokens||0)}</span></div>
+      <div><span class="d-l">总计</span><span class="d-v">${fmtNum(c.total_tokens||0)}</span></div>
+      <div><span class="d-l">尝试 / 切换</span><span class="d-v">${c.attempts} / ${c.failovers}</span></div>
+    </div></div>
+    ${errBlock}
+    <div class="trace-sec"><h4>调用链</h4>${chain}</div>
+  `;
+  $('trace-drawer').classList.add('open');
+  $('trace-backdrop').classList.add('open');
+  document.body.classList.add('no-scroll');
+  monitorPausing=true; // hold auto-refresh while inspecting
+}
+function closeTrace(){
+  $('trace-drawer').classList.remove('open');
+  $('trace-backdrop').classList.remove('open');
+  document.body.classList.remove('no-scroll');
+  monitorPausing=false;
+}
+function buildTraceChain(c){
+  const attempts=c.attempts||1, failovers=c.failovers||0;
+  let html='<div class="trace-chain">';
+  for(let i=0;i<attempts;i++){
+    const isLast=i===attempts-1;
+    const cls=isLast?(c.ok?'ok':'err'):'err';
+    const label=isLast?(c.ok?'最终成功':'最终失败'):('第'+(i+1)+'次');
+    html+=`<span class="trace-node ${cls}">${label}</span>`;
+    if(!isLast)html+='<span class="trace-arrow">→</span>';
+  }
+  html+='</div>';
+  if(failovers>0)html+=`<div style="color:var(--dim);font-size:12px;margin-top:8px;">其中 ${failovers} 次在上游之间做了故障切换</div>`;
+  return html;
+}
+
+// --- stats ---
+function localDay(d){const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,'0'),dd=String(d.getDate()).padStart(2,'0');return `${y}-${m}-${dd}`;}
+function daysAgo(n){const d=new Date();d.setDate(d.getDate()-n);return d;}
+let curRange={from:null,to:null};
+let trendCache=null;
+function pickRange(btn,days){
+  document.querySelectorAll('[data-range]').forEach(b=>{b.classList.remove('on');});
+  if(btn){btn.classList.add('on');}
+  const to=localDay(new Date()), from=localDay(daysAgo(days));
+  loadStats(from,to);
+}
+function customRange(){
+  const from=$('r-from').value, to=$('r-to').value;
+  if(!from||!to){toast('请选择起止日期','err');return;}
+  if(from>to){toast('起始日期不能晚于结束日期','err');return;}
+  document.querySelectorAll('[data-range]').forEach(b=>{b.classList.remove('on');});
+  loadStats(from,to);
+}
+async function loadStats(from,to){
+  curRange={from,to};
+  const s=await j(`/api/stats/range?from=${from}&to=${to}`);
+  const t=s.total||{};
+  $('range-label').textContent=`范围 ${from} ~ ${to}`;
+  const total=t.total||0, ok=t.ok||0, failed=t.failed||0;
+  const rate = total>0 ? (ok/total*100) : 0;
+  const avgMs = total>0 ? Math.round((t.duration_sum||0)/total) : 0;
+  const avgTxt = avgMs>=1000 ? (avgMs/1000).toFixed(2)+'s' : avgMs+'ms';
+  $('stats-today').innerHTML=`
+    <div class="stat" style="--stat-c:var(--accent)"><b>${fmtNum(total)}</b><span>调用总数</span></div>
+    <div class="stat" style="--stat-c:var(--ok)"><b style="color:var(--ok)">${fmtNum(ok)}</b><span>成功</span></div>
+    <div class="stat" style="--stat-c:var(--err)"><b style="color:var(--err)">${fmtNum(failed)}</b><span>失败</span></div>
+    <div class="stat" style="--stat-c:${rate>=95?'var(--ok)':rate>=80?'var(--warn)':'var(--err)'}"><b style="color:${rate>=95?'var(--ok)':rate>=80?'var(--warn)':'var(--err)'}">${rate.toFixed(1)}%</b><span>成功率</span></div>
+    <div class="stat" style="--stat-c:var(--warn)"><b style="color:var(--warn)">${t.rate_limit||0}</b><span>限流</span></div>
+    <div class="stat"><b>${avgTxt}</b><span>平均耗时</span></div>
+    <div class="stat" style="--stat-c:var(--accent)"><b style="color:var(--accent-fg)">${fmtNum(t.prompt_tokens||0)}</b><span>输入 token</span></div>
+    <div class="stat" style="--stat-c:var(--accent)"><b style="color:var(--accent-fg)">${fmtNum(t.completion_tokens||0)}</b><span>输出 token</span></div>
+    <div class="stat"><b>${fmtNum(t.total_tokens||0)}</b><span>总 token</span></div>`;
+
+  renderTrend(s, from, to);
+
+  const byKey=t.by_key||{};
+  const keyNames=Object.keys(byKey).sort((a,b)=>byKey[b]-byKey[a]);
+  $('stats-bykey').innerHTML=keyNames.length?keyNames.map(k=>`<tr><td style="font-weight:500;">${esc(k)}</td><td>${fmtNum(byKey[k])}</td></tr>`).join(''):emptyState('activity','暂无用量数据','当前时间范围内没有按 Key 维度的调用记录');
+  const dayArr=Object.keys(s.days||{}).map(d=>Object.assign({date:d},s.days[d]));
+  const sortedDays=applySort(dayArr,'days');
+  $('stats-days').innerHTML=sortedDays.length?sortedDays.map(v=>{return `<tr>
+    <td class="mono">${v.date}</td><td>${fmtNum(v.total)}</td><td>${fmtNum(v.ok)}</td><td>${fmtNum(v.failed)}</td>
+    <td>${v.rate_limit}</td><td>${v.timeout}</td><td>${v.network}</td><td>${v.server_err}</td>
+    <td>${fmtNum(v.prompt_tokens||0)}</td><td>${fmtNum(v.completion_tokens||0)}</td><td>${fmtNum(v.total_tokens||0)}</td></tr>`;}).join(''):'<tr><td colspan="11" style="color:var(--dim);text-align:center;padding:24px;">该范围暂无数据</td></tr>';
+  syncSortHeaders('days');
+}
+
+// renderTrend draws a simple SVG bar chart. Same-day range -> 24 hourly bars;
+// otherwise -> one bar per date across [from,to].
+function renderTrend(s, from, to){
+  let labels=[], values=[], rates=[], titleSuffix='';
+  if(from===to){
+    const bh=(s.total&&s.total.by_hour)||[];
+    const t=s.total||{};
+    const total=t.total||0, ok=t.ok||0;
+    const overallRate=total>0?ok/total*100:null;
+    for(let h=0;h<24;h++){labels.push(String(h).padStart(2,'0'));values.push(bh[h]||0);}
+    rates=overallRate!=null?[overallRate]:[];
+    titleSuffix='（按小时）';
+  }else{
+    const days=s.days||{};
+    const start=new Date(from+'T00:00:00'), end=new Date(to+'T00:00:00');
+    for(let d=new Date(start); d<=end; d.setDate(d.getDate()+1)){
+      const key=localDay(d);
+      labels.push(key.slice(5));
+      const day=days[key]||{};
+      values.push(day.total||0);
+      rates.push(day.total>0?(day.ok/day.total*100):null);
+    }
+    titleSuffix='（按日期）';
+  }
+  $('trend-title').textContent='请求次数趋势 '+titleSuffix;
+  const host=$('trend-chart');
+  const W=Math.max(300, Math.floor((host?host.clientWidth:0)||680));
+  trendCache={labels,values,rates,W};
+  $('trend-chart').innerHTML=dualChartSVG(labels,values,rates,W);
+}
+
+// dualChartSVG: bars (call count, left axis) + optional line (success rate %, right axis)
+// h is optional: the stats page uses the default 240, the overview mini chart
+// passes a shorter height. Everything else scales off it.
+function dualChartSVG(labels,values,rates,W,h){
+  const n=labels.length;
+  // padT must fit both the fixed axis-title row (y~10) and the top gridline's
+  // value label (baseline at padT+3) without the two colliding -- they sit at
+  // nearly the same x, so they need real vertical separation, not just a
+  // few px. 26 leaves the title an unambiguous line of its own.
+  const H=h||240, padL=44, padB=38, padT=26, padR=64;
+  const cw=(W-padL-padR)/n;
+  const bw=Math.max(4, cw*0.62);
+  const hasRate=rates.length>0;
+  const singleRate=(rates.length===1 && n>1)?rates[0]:null;
+  const max=Math.max(1,...values);
+  const plotH=H-padB-padT;
+  const yL=v=>padT+plotH-(v/max)*plotH;           // left axis: call count
+  const yR=p=>padT+plotH-(p/100)*plotH;           // right axis: 0-100%
+  // left gridlines
+  let grid='',ticks=4;
+  for(let i=0;i<=ticks;i++){
+    const gy=padT+plotH*i/ticks; const val=Math.round(max*(ticks-i)/ticks);
+    grid+=`<line x1="${padL}" y1="${gy.toFixed(1)}" x2="${W-padR}" y2="${gy.toFixed(1)}" stroke="var(--border)" stroke-width="1" stroke-dasharray="${i===ticks?'0':'3 4'}"/>`;
+    grid+=`<text x="${padL-6}" y="${(gy+3).toFixed(1)}" text-anchor="end" font-size="10" fill="var(--dim)">${fmtNum(val)}</text>`;
+  }
+  // right axis ticks (only when there is rate)
+  if(hasRate){
+    for(let i=0;i<=4;i++){
+      const pct=100-i*25;
+      const gy=padT+plotH*i/4;
+      grid+=`<text x="${W-padR+6}" y="${(gy+3).toFixed(1)}" text-anchor="start" font-size="10" fill="var(--ok)">${pct}%</text>`;
+    }
+    // Axis titles live on their own line pinned to the very top, independent of
+    // padT. Deriving them from padT (e.g. padT-6) kept them 9px from the top
+    // gridline's value label at padT+3 -- same x, so they overlapped at every
+    // chart height.
+    grid+=`<text x="${W-padR+4}" y="11" text-anchor="start" font-size="10" fill="var(--ok)" font-weight="600">成功率</text>`;
+    grid+=`<text x="${padL-8}" y="11" text-anchor="end" font-size="10" fill="var(--dim)" font-weight="600">调用</text>`;
+  }
+  // bars
+  let bars='', points=[], segs=[];
+  const showEvery = n<=16 ? 1 : Math.ceil(n/16);
+  for(let i=0;i<n;i++){
+    const x=padL+cw*i+(cw-bw)/2;
+    const by=yL(values[i]);
+    const bh=padT+plotH-by;
+    let tip=labels[i]+'\n调用 '+values[i]+' 次';
+    const rateVal=singleRate!=null?singleRate:rates[i];
+    if(rateVal!=null)tip+='\n成功率 '+rateVal.toFixed(1)+'%';
+    bars+=`<rect x="${x.toFixed(1)}" y="${by.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0,bh).toFixed(1)}" rx="3" fill="var(--chart-bar)" opacity="0.85" data-tip="${esc(tip)}"></rect>`;
+    if(i%showEvery===0){
+      bars+=`<text x="${(x+bw/2).toFixed(1)}" y="${H-padB+15}" text-anchor="middle" font-size="10" fill="var(--dim)">${esc(labels[i])}</text>`;
+    }
+    // rate points
+    const pr=rates[i];
+    if(pr!=null){
+      const px=x+bw/2;
+      const py=yR(pr);
+      points.push({px,py,pr,lab:labels[i]});
+    }
+  }
+  // success-rate line
+  let rateSVG='';
+  if(points.length>1){
+    let d='';
+    points.forEach((p,i)=>{d+=(i===0?'M':'L')+p.px.toFixed(1)+' '+p.py.toFixed(1);});
+    rateSVG+=`<path d="${d}" fill="none" stroke="var(--ok)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+    points.forEach(p=>{
+      const ctip=p.lab+'\n成功率 '+p.pr.toFixed(1)+'%';
+      rateSVG+=`<circle cx="${p.px.toFixed(1)}" cy="${p.py.toFixed(1)}" r="3" fill="var(--panel)" stroke="var(--ok)" stroke-width="2" data-tip="${esc(ctip)}"></circle>`;
+    });
+  }else if(points.length===1){
+    // single overall rate: draw a horizontal reference line
+    const p=points[0];
+    const srtip=p.lab+'\n成功率 '+p.pr.toFixed(1)+'%';
+    rateSVG+=`<line x1="${padL}" y1="${p.py.toFixed(1)}" x2="${W-padR}" y2="${p.py.toFixed(1)}" stroke="var(--ok)" stroke-width="1.5" stroke-dasharray="5 4" data-tip="${esc(srtip)}"></line>`;
+    // Clamp the label inside the plot area: when the overall rate sits near 0%
+    // or 100%, the reference line lands right on top of the axis tick labels.
+    const labelY=Math.min(Math.max(p.py-4,padT+9),padT+plotH-2);
+    rateSVG+=`<text x="${padL+4}" y="${labelY.toFixed(1)}" text-anchor="start" font-size="10" fill="var(--ok)" font-weight="600">${p.pr.toFixed(1)}%</text>`;
+  }
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="xMinYMin meet">${grid}${bars}${rateSVG}</svg>`;
+}
+function refreshStats(){ if(curRange.from){loadStats(curRange.from,curRange.to);} else {pickRange(document.querySelector('[data-range="0"]'),0);} }
+
+// --- custom chart hover tooltip (replaces native <title>) ---
+// setupChartTip wires the shared floating tooltip to every SVG chart host that
+// carries [data-tip] elements (stats trend chart, overview mini trend). Called
+// at boot and after a host is first rendered; wiring is idempotent per host.
+const CHART_TIP_HOSTS=['trend-chart','ov-trend'];
+function setupChartTip(){
+  const tip=$('chart-tip');
+  if(!tip)return;
+  // ensure fixed tooltip is attached to body so no ancestor can clip it
+  if(tip.parentElement!==document.body)document.body.appendChild(tip);
+  CHART_TIP_HOSTS.forEach(id=>{
+    const host=$(id);
+    if(!host||host.dataset.tipWired)return;
+    host.dataset.tipWired='1';
+    host.addEventListener('mousemove',e=>{
+      const el=e.target.closest('[data-tip]');
+      if(!el){tip.classList.add('hidden');return;}
+      const lines=(el.dataset.tip||'').split('\n');
+      const title=lines[0]||'';
+      const rows=lines.slice(1).map(l=>{
+        const i=l.indexOf(' ');
+        if(i<0)return `<div class="ct-row"><span>${esc(l)}</span></div>`;
+        const k=l.slice(0,i), v=l.slice(i+1);
+        return `<div class="ct-row"><span class="ct-k">${esc(k)}</span><span>${esc(v)}</span></div>`;
+      }).join('');
+      tip.innerHTML=`<div class="ct-title">${esc(title)}</div>${rows}`;
+      tip.classList.remove('hidden');
+      let x=e.clientX+14, y=e.clientY+14;
+      const r=tip.getBoundingClientRect();
+      if(x+r.width>innerWidth-8)x=e.clientX-r.width-14;
+      if(y+r.height>innerHeight-8)y=e.clientY-r.height-14;
+      tip.style.left=x+'px';tip.style.top=y+'px';
+    });
+    host.addEventListener('mouseleave',()=>tip.classList.add('hidden'));
+  });
+}
+
+// re-render trend chart to fit container width on resize
+let trendResizeTimer=null;
+function rerenderTrend(){
+  if(!trendCache)return;
+  const host=$('trend-chart'); if(!host)return;
+  const W=Math.max(300, Math.floor((host.clientWidth||0)||680));
+  if(W===trendCache.W)return;
+  trendCache.W=W;
+  host.innerHTML=dualChartSVG(trendCache.labels,trendCache.values,trendCache.rates,W);
+}
+window.addEventListener('resize',()=>{
+  if($('tab-stats').classList.contains('hidden'))return;
+  clearTimeout(trendResizeTimer);
+  trendResizeTimer=setTimeout(rerenderTrend,150);
+});
+
+// --- keyboard shortcuts ---
+function closeShortcuts(){$('shortcuts-modal').classList.add('hidden');}
+function openShortcuts(){$('shortcuts-modal').classList.remove('hidden');}
+function refreshCurrentTab(){
+  if(currentTab==='keys')reloadKeys();
+  else if(currentTab==='monitor')refreshCallsData();
+  else if(currentTab==='stats')refreshStats();
+  else if(currentTab==='users')reloadUsers();
+  else if(currentTab==='config')reloadConfig();
+}
+(function(){
+  const typing=()=>/^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement||{}).tagName);
+  const anyModalOpen=()=>!!document.querySelector('.modal:not(.hidden)');
+  const tabMap={'1':'overview','2':'config','3':'keys','4':'monitor','5':'stats','6':'users'};
+  document.addEventListener('keydown',e=>{
+    if(e.key==='Escape'){
+      if(document.querySelector('.drawer.open')){closeTrace();return;}
+      document.querySelectorAll('.modal:not(.hidden)').forEach(m=>m.classList.add('hidden'));
+      if(document.querySelector('.sidebar.open'))toggleSidebar(false);
+      return;
+    }
+    if(typing()||anyModalOpen()||e.metaKey||e.ctrlKey||e.altKey)return;
+    const k=e.key.toLowerCase();
+    if(k>='1'&&k<='6'){tab(tabMap[k]);e.preventDefault();return;}
+    if(k==='r'){refreshCurrentTab();e.preventDefault();return;}
+    if(k==='t'){toggleTheme();e.preventDefault();return;}
+    if(k==='n'){if(currentTab==='keys'&&isAdmin())openKeyModal();e.preventDefault();return;}
+    if(k==='/'){if(currentTab==='monitor'){const f=$('f-route');if(f){f.focus();e.preventDefault();}}return;}
+    if(k==='?'){openShortcuts();e.preventDefault();return;}
+  });
+})();
+
+
+// --- overview dashboard ---
+function rateColor(r){return r>=95?'var(--ok)':r>=80?'var(--warn)':'var(--err)';}
+function avgTxt(t){const total=t.total||0;const ms=total>0?Math.round((t.duration_sum||0)/total):0;return ms>=1000?(ms/1000).toFixed(2)+'s':ms+'ms';}
+function ovDelta(cur,prev,unit,tone){
+  if(prev==null||prev===0)return '<span class="ov-delta ov-muted">新</span>';
+  const pct=(cur-prev)/prev*100, up=pct>=0;
+  let color='var(--accent-fg)';
+  if(tone==='goodup')color=up?'var(--ok)':'var(--err)';
+  const arrow=up?'▲':'▼';
+  return `<span class="ov-delta" style="color:${color}">${arrow} ${Math.abs(pct).toFixed(0)}%${unit?` <span class="ov-muted">${unit}</span>`:''}</span>`;
+}
+function ovStat(value,label,color,sub){
+  return `<div class="stat" style="--stat-c:${color}"><b>${value}</b><span>${label}</span>${sub?`<div class="ov-stat-sub">${sub}</div>`:''}</div>`;
+}
+async function loadOverview(){
+  const kpi=$('ov-kpi'); if(!kpi)return;
+  $('ov-updated').textContent='加载中…';
+  let ups=[],healthRes={},todayS={},yestS={},keys=[],calls=[];
+  try{
+    [ups,healthRes,todayS,yestS,keys,calls]=await Promise.all([
+      j('/api/upstreams'), j('/api/health?n=400'),
+      j(`/api/stats/range?from=${localDay(new Date())}&to=${localDay(new Date())}`),
+      j(`/api/stats/range?from=${localDay(daysAgo(1))}&to=${localDay(daysAgo(1))}`),
+      j('/api/clientkeys'), j('/api/calls?n=50'),
+    ]);
+  }catch(e){ $('ov-updated').textContent='加载失败'; return; }
+  const healthMap=(healthRes&&healthRes.upstreams)||{};
+  const enabled=(ups||[]).filter(u=>u.enabled);
+  const bad=[],warn=[],unknown={};
+  enabled.forEach(u=>{const h=healthMap[u.name];if(!h||h.total===0){unknown[u.name]=1;return;}if(h.rate<80)bad.push({u,h});else if(h.rate<95)warn.push({u,h});});
+  const healthyCount=enabled.length-bad.length-warn.length;
+  const overallCls=bad.length?'bad':warn.length?'warn':'ok';
+  const overallColor=bad.length?'var(--err)':warn.length?'var(--warn)':'var(--ok)';
+  // healthyCount already folds in "never called" upstreams (they land in
+  // neither bad nor warn), so adding unknown again here double-counted them
+  // and could show e.g. "100%" next to "1 异常 / 2 启用".
+  const ringPct=enabled.length?Math.round(healthyCount/enabled.length*100):100;
+
+  // KPI row
+  const tt=todayS.total||{}, yt=yestS.total||{};
+  const tTotal=tt.total||0, yTotal=yt.total||0;
+  const tTok=tt.total_tokens||0, yTok=yt.total_tokens||0;
+  const tRate=tTotal>0?tt.ok/tTotal*100:0, yRate=yTotal>0?yt.ok/yTotal*100:0;
+  kpi.innerHTML=
+    ovStat(fmtNum(tTotal),'今日调用','var(--accent)',ovDelta(tTotal,yTotal,'次'))+
+    ovStat(tRate.toFixed(1)+'%','今日成功率',rateColor(tRate),ovDelta(tRate,yRate,null,'goodup'))+
+    ovStat(fmtNum(tTok),'今日 Token','var(--accent)',ovDelta(tTok,yTok,'tok'))+
+    ovStat(enabled.length?ringPct+'%':'—','上游健康度',overallColor,enabled.length?`${bad.length} 异常 / ${enabled.length} 启用`:'未配置上游');
+
+  // health card
+  const hc=$('ov-health');
+  if(!enabled.length){
+    hc.innerHTML=emptyState('bolt','没有启用的上游','启用至少一个上游，代理才能对外提供服务','启用 / 新增上游','openUpModal()');
+  }else{
+    const rows=[...bad,...warn].map(({u,h})=>{
+      const t=h.rate<80?'err':'warn';
+      return `<div class="ov-up-row">${statusDot(t)}<span class="ov-up-name">${esc(u.name)}</span><span class="tag ${u.protocol}">${u.protocol}</span><span class="ov-up-rate" style="color:${t==='err'?'var(--err)':'var(--warn)'}">${h.rate.toFixed(0)}%</span>${h.last_err?`<span class="ov-up-err" title="${esc(h.last_err)}">${esc(h.last_err)}</span>`:''}</div>`;
+    }).join('')||'<div class="ov-empty">所有启用上游运行正常</div>';
+    hc.innerHTML=`<div class="ov-health-top"><div class="ov-ring ${overallCls}">${ringPct}%</div><div><div class="ov-health-title" style="color:${overallColor}">${bad.length?'存在异常上游':warn.length?'部分上游波动':'全部上游正常'}</div><div class="ov-health-sub">${enabled.length} 个启用 · ${bad.length} 异常 · ${warn.length} 波动 · ${Object.keys(unknown).length} 未调用</div></div></div>${rows}`;
+  }
+
+  // usage card
+  $('ov-usage').innerHTML=
+    `<div class="ov-usage-row"><span>调用总数</span><b>${fmtNum(tTotal)}</b>${ovDelta(tTotal,yTotal,'次')}</div>`+
+    `<div class="ov-usage-row"><span>成功率</span><b style="color:${rateColor(tRate)}">${tRate.toFixed(1)}%</b>${ovDelta(tRate,yRate,null,'goodup')}</div>`+
+    `<div class="ov-usage-row"><span>Token 总量</span><b>${fmtNum(tTok)}</b>${ovDelta(tTok,yTok,'tok')}</div>`+
+    `<div class="ov-usage-row"><span>平均耗时</span><b>${avgTxt(tt)}</b><span class="ov-delta ov-muted">昨日 ${avgTxt(yt)}</span></div>`;
+
+  // insights card
+  const now=Date.now()/1000; const ins=[];
+  (keys||[]).forEach(k=>{
+    if(!k.enabled)return;
+    if(k.expires_at){const d=(k.expires_at-now)/86400;
+      if(d<0)ins.push({lvl:'bad',icon:'alert',text:`${k.name} 已过期`,goto:'keys'});
+      else if(d<7)ins.push({lvl:'warn',icon:'clock',text:`${k.name} ${d<1?'今天':Math.ceil(d)+' 天后'}到期`,goto:'keys'});}
+    if(k.token_quota&&(k.used_tokens||0)/k.token_quota>=1)ins.push({lvl:'bad',icon:'alert',text:`${k.name} 已超出 token 额度`,goto:'keys'});
+    else if(k.token_quota&&(k.used_tokens||0)/k.token_quota>=0.8)ins.push({lvl:'warn',icon:'alert',text:`${k.name} token 额度 ${Math.round((k.used_tokens||0)/k.token_quota*100)}%`,goto:'keys'});
+  });
+  bad.forEach(({u})=>ins.push({lvl:'bad',icon:'bolt',text:`上游 ${u.name} 成功率偏低`,goto:'config'}));
+  const failCount=(calls||[]).filter(c=>c.status_code>=400||c.err_type).length;
+  if(failCount>0)ins.push({lvl:'warn',icon:'bolt',text:`近 50 次调用有 ${failCount} 次失败`,goto:'monitor'});
+  const ic=$('ov-insights');
+  ic.innerHTML=ins.length?ins.map(i=>`<div class="ov-insight ${i.lvl}" onclick="tab('${i.goto}')"><span class="ico" data-icon="${i.icon}"></span><span>${esc(i.text)}</span><span class="ov-insight-go">查看 →</span></div>`).join(''):'<div class="ov-empty">未发现明显风险，状态良好</div>';
+  injectIcons(ic);
+
+  // recent failures card
+  const fl=(calls||[]).filter(c=>c.status_code>=400||c.err_type).slice(0,6);
+  const fc=$('ov-fails');
+  fc.innerHTML=fl.length?`<table class="ov-fail-tbl"><thead><tr><th>时间</th><th>上游</th><th>状态</th><th>错误</th></tr></thead><tbody>${fl.map(c=>`<tr><td class="mono">${new Date(c.time).toLocaleTimeString()}</td><td>${esc(c.upstream||'-')}</td><td>${badge(String(c.status_code||'-'), httpType(c.status_code))}</td><td class="ov-err-cell" title="${esc(c.err_detail||'')}">${esc(c.err_type||'-')}</td></tr>`).join('')}</tbody></table>`:'<div class="ov-empty">近 50 次调用无失败记录</div>';
+
+  // mini hourly trend (bars = call count, line = success rate)
+  renderOverviewTrend(todayS);
+
+  $('ov-updated').textContent='更新于 '+new Date().toLocaleTimeString();
+}
+
+// renderOverviewTrend draws today's hourly call volume + success rate as a
+// compact chart, reusing the stats page's dual-axis renderer at a shorter
+// height. This is what the "recent calls" list used to try to convey, but a
+// shape is faster to read than scanning rows for a pattern.
+function renderOverviewTrend(todayS){
+  const host=$('ov-trend'); if(!host)return;
+  const bh=(todayS.total&&todayS.total.by_hour)||[];
+  const total=(todayS.total&&todayS.total.total)||0;
+  if(total===0){
+    host.innerHTML=emptyState('chart','今日暂无调用','有调用后这里会显示按小时的请求量与成功率趋势');
+    return;
+  }
+  const labels=[],values=[];
+  for(let h=0;h<24;h++){labels.push(String(h).padStart(2,'0'));values.push(bh[h]||0);}
+  const t=todayS.total||{};
+  const overallRate=t.total>0?t.ok/t.total*100:null;
+  const W=Math.max(320,host.clientWidth||600);
+  // 165 keeps the plot area comfortable now that padT reserves a line for the
+  // axis titles; at 140 the bars had only ~76px to work with.
+  host.innerHTML=dualChartSVG(labels,values,overallRate!=null?[overallRate]:[],W,165);
+  setupChartTip(); // ov-trend now has [data-tip] nodes; wire it if not already
+}
+
+// --- boot ---
+let monitorTimer=null;
+function boot(){
+  injectIcons();
+  applyRole();
+  setupChartTip();
+  reloadConfig();
+  const hash=location.hash.slice(1);
+  if(hash&&$('tab-'+hash))tab(hash); else tab('overview');
+  if(monitorTimer)clearInterval(monitorTimer);
+  monitorTimer=setInterval(()=>{if(!$('tab-monitor').classList.contains('hidden'))refreshCalls();},5000);
+  setInterval(()=>{if($('tab-overview') && !$('tab-overview').classList.contains('hidden'))loadOverview();},15000);
+}
+
+// pause auto-refresh while hovering the monitor table
+(function(){
+  const tbl=$('calls-table');
+  if(tbl){
+    tbl.addEventListener('mouseenter',()=>{monitorPausing=true;});
+    tbl.addEventListener('mouseleave',()=>{monitorPausing=false;});
+  }
+})();
+
+// --- dashboard user management (admin only) ---
+function openUserModal(){
+  ['nu-name','nu-pass'].forEach(id=>$(id).value='');
+  $('nu-role').value='viewer';
+  $('user-modal-msg').textContent='';
+  $('user-modal').classList.remove('hidden');
+}
+function closeUserModal(){$('user-modal').classList.add('hidden');}
+async function reloadUsers(){
+  const tbody=$('users');
+  if(!tbody)return;
+  tbody.innerHTML=skelRows(3,2);
+  try{
+    const list=await j('/api/users');
+    tbody.innerHTML=(list||[]).map(u=>{
+      const isSelf=u.username===(localStorage.getItem('llmproxy_user')||'');
+      return `<tr>
+        <td style="font-weight:500;">${esc(u.username)}${isSelf?' <span class="h-txt">（当前登录）</span>':''}</td>
+        <td><span class="tag ${u.role==='admin'?'on':'off'}">${u.role==='admin'?'管理员':'只读'}</span></td>
+        <td class="row" style="flex-wrap:nowrap;">
+          <button class="btn danger sm" onclick="delUser('${esc(u.username)}')">删除</button>
+        </td></tr>`;
+    }).join('')||'<tr><td colspan="3" style="color:var(--dim);text-align:center;padding:28px;">暂无账号</td></tr>';
+  }catch(e){
+    tbody.innerHTML='<tr><td colspan="3" style="color:var(--err);text-align:center;padding:28px;">加载失败：无权访问</td></tr>';
+  }
+}
+async function addUser(){
+  const body={username:$('nu-name').value.trim(),password:$('nu-pass').value,role:$('nu-role').value};
+  $('user-modal-msg').textContent='';
+  if(!body.username){$('user-modal-msg').textContent='用户名必填';return;}
+  if(body.password.length<6){$('user-modal-msg').textContent='密码至少 6 位';return;}
+  const res=await j('/api/users/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(res&&res.error){$('user-modal-msg').textContent=res.error;return;}
+  closeUserModal();
+  toast('账号已创建','ok');
+  reloadUsers();
+}
+async function delUser(name){
+  confirmDialog('删除账号',`该账号将立即失效，其已登录的会话也会在下次请求时被拒绝。`,'永久删除',async()=>{
+    const res=await j('/api/users/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:name})});
+    if(res&&res.error){toast(res.error,'err');return;}
+    toast(`已删除账号「${name}」`,'ok');
+    reloadUsers();
+  },name);
+}
+
+// --- Key 进度条辅助函数 ---
+function quotaBar(used,quota){
+  if(!quota)return `<span class="quota-txt">${fmtNum(used)}</span>`;
+  const pct=Math.min(100,(used/quota*100));
+  const cls=pct>=100?'over':pct>=80?'warn':'';
+  return `<div class="quota">
+    <div class="quota-bar"><div class="quota-fill ${cls}" style="width:${pct}%"></div></div>
+    <div class="quota-txt">${fmtNum(used)} / ${fmtNum(quota)}</div>
+  </div>`;
+}
+
+// entry
+if(tok())showApp(); else showLogin();
+
+// click on modal backdrop closes it
+document.querySelectorAll('.modal').forEach(m=>{
+  m.addEventListener('click',e=>{if(e.target===m)m.classList.add('hidden');});
+});
+</script>
+</body>
+</html>
