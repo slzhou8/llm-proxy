@@ -1,9 +1,12 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"llmproxy/config"
 	"llmproxy/proxy"
@@ -31,6 +34,7 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/clientkeys/update", s.requireAdmin(s.apiClientKeyUpdate))
 	mux.HandleFunc("/api/clientkeys/delete", s.requireAdmin(s.apiClientKeyDelete))
 	mux.HandleFunc("/api/clientkeys/reset", s.requireAdmin(s.apiClientKeyReset))
+	mux.HandleFunc("/api/models", s.requireAdmin(s.apiModels))
 	mux.HandleFunc("/api/test", s.requireAdmin(s.apiTest))
 	mux.HandleFunc("/api/alert", s.requireAuth(s.apiAlert))
 	mux.HandleFunc("/api/users", s.requireAdmin(s.apiUsers))
@@ -465,6 +469,42 @@ func (s *Server) apiUserDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// modelsTimeout bounds the model listing. It is a plain GET, so it should answer
+// quickly; without a bound a hung upstream would hold the dashboard request open.
+const modelsTimeout = 20 * time.Second
+
+// apiModels lists the models one upstream actually serves, so the test dialog can
+// offer a real choice. Which models exist is a property of the upstream, so this
+// has to be asked upstream rather than guessed from the protocol.
+func (s *Server) apiModels(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	name := r.URL.Query().Get("upstream")
+	if name == "" {
+		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": "缺少 upstream 参数"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), modelsTimeout)
+	defer cancel()
+
+	models, err := s.proxy.FetchModels(ctx, name)
+	if err != nil {
+		if errors.Is(err, proxy.ErrUpstreamNotFound) {
+			s.writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+			return
+		}
+		// The upstream refused or was unreachable. That is a real answer about the
+		// upstream, not a dashboard fault, so report it as such and let the dialog
+		// fall back to a free-text model field.
+		s.writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	s.writeJSON(w, http.StatusOK, models)
 }
 
 // apiTest lets the dashboard send a raw request through the proxy and see the

@@ -1008,15 +1008,39 @@ tr.up-row-broken:hover{opacity:1;}
 
 <!-- Upstream test result modal -->
 <div id="test-modal" class="modal hidden">
-  <div class="box" style="width:500px;">
+  <div class="box" style="width:560px;">
     <h3><span id="test-dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--dim);margin-right:8px;vertical-align:middle;"></span>上游连通性测试</h3>
-    <div style="font-size:12.5px;color:var(--dim);margin:0 0 12px;">
+    <div style="font-size:12.5px;color:var(--dim);margin:0 0 4px;">
       <span id="test-up"></span> · <span id="test-proto"></span>
     </div>
-    <div id="test-body" style="background:var(--code-bg);border:1px solid var(--border);border-radius:8px;padding:12px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px;max-height:280px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;"></div>
+
+    <label>从上游模型列表选择</label>
+    <div class="row" style="gap:8px;">
+      <input id="test-model-filter" placeholder="过滤模型名…" style="flex:1;" oninput="renderTestModels()">
+      <label style="margin:0;display:flex;align-items:center;gap:5px;cursor:pointer;font-weight:400;white-space:nowrap;">
+        <input type="checkbox" id="test-only-avail" style="width:auto;margin:0;" checked onchange="renderTestModels()">
+        仅可用
+      </label>
+      <button class="btn ghost sm" id="test-reload" onclick="loadTestModels()">刷新</button>
+    </div>
+    <select id="test-model-list" style="margin-top:6px;" size="8" onchange="pickTestModel(this.value)"></select>
+    <div id="test-models-note" style="font-size:12px;color:var(--dim);margin-top:5px;"></div>
+
+    <label>模型（也可直接手填）</label>
+    <input id="test-model" placeholder="如 auto" onkeydown="if(event.key==='Enter')runTest();">
+
+    <div class="row" style="margin-top:14px;gap:10px;align-items:center;">
+      <label style="margin:0;display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:400;">
+        <input type="checkbox" id="test-stream" style="width:auto;margin:0;" checked>
+        流式输出（逐块实时显示）
+      </label>
+      <button class="btn" id="test-run" onclick="runTest()" style="margin-left:auto;">开始测试</button>
+    </div>
+
+    <div id="test-body" style="margin-top:14px;background:var(--code-bg);border:1px solid var(--border);border-radius:8px;padding:12px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px;max-height:280px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;"></div>
     <div class="row" style="margin-top:16px;justify-content:flex-end;">
       <span id="test-duration" style="color:var(--dim);font-size:12.5px;margin-right:auto;"></span>
-      <button class="btn" onclick="closeTestModal()">关闭</button>
+      <button class="btn ghost" onclick="closeTestModal()">关闭</button>
     </div>
   </div>
 </div>
@@ -1167,6 +1191,15 @@ function injectIcons(root){
 function fmtMs(ms){
   ms=Number(ms)||0;
   return ms>=1000 ? (ms/1000).toFixed(ms>=10000?0:1)+'s' : ms+'ms';
+}
+function fmtDateTime(t){
+  // null/'' would become the epoch via new Date(), and a 1970 timestamp in a log
+  // reads as real data rather than as missing data.
+  if(t==null||t==='')return '-';
+  const d=new Date(t);
+  if(isNaN(d.getTime()))return String(t);
+  const p=n=>String(n).padStart(2,'0');
+  return localDay(d)+' '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds());
 }
 function fmtNum(n){
   n=Number(n)||0;
@@ -1701,40 +1734,269 @@ async function testAlert(){
 }
 
 // --- upstream connectivity test ---
-function closeTestModal(){$('test-modal').classList.add('hidden');}
-async function testUp(name,proto){
+// --- upstream connectivity test ---
+// The dialog opens, offers a model choice, and only sends a request when the
+// user asks for one: a test spends real upstream quota, so it must not fire on
+// open. Which models an upstream serves is a property of that upstream, so the
+// list is fetched from it via /api/models rather than hardcoded per protocol.
+let curTest={name:'',proto:'',explicit:false};
+let testAbort=null;
+
+function closeTestModal(){
+  // Abandon an in-flight test rather than leave it writing into a hidden pane.
+  if(testAbort){testAbort.abort();testAbort=null;}
+  $('test-modal').classList.add('hidden');
+}
+
+function defaultTestModel(proto){
+  return proto==='anthropic'?'claude-sonnet-4-20250514':'auto';
+}
+
+function testUp(name,proto){
+  let remembered='';
+  try{remembered=localStorage.getItem('testModel:'+name)||'';}catch(e){}
+  // explicit marks a model the user picked before. A mere protocol default must
+  // not survive a listing that does not offer it.
+  curTest={name:name,proto:proto,explicit:!!remembered};
   $('test-up').textContent=name;
   $('test-proto').textContent=proto;
   $('test-dot').style.background='var(--dim)';
+  $('test-duration').textContent='';
+  $('test-body').textContent='选择或填写模型，然后点击「开始测试」。';
+  $('test-run').disabled=false;
+  $('test-run').textContent='开始测试';
+  $('test-model').value=remembered||defaultTestModel(proto);
+  testModels=[];testNoteExtra='';
+  $('test-model-filter').value='';
+  $('test-only-avail').checked=true;
+  $('test-model-list').innerHTML='<option value="">加载中…</option>';
+  $('test-models-note').textContent='';
+  $('test-modal').classList.remove('hidden');
+  loadTestModels();
+}
+
+// Listing models is a plain GET that spends no quota, so it runs on open.
+// testModels caches the last listing so filtering is instant and costs no
+// upstream request. testNoteExtra holds a message the count line must not lose
+// when the list is re-filtered.
+let testModels=[];
+let testNoteExtra='';
+
+// Listing models is a plain GET that spends no quota, so it runs on open.
+async function loadTestModels(){
+  const name=curTest.name;
+  if(!name)return;
+  const sel=$('test-model-list'),note=$('test-models-note');
+  testModels=[];testNoteExtra='';
+  sel.innerHTML='<option value="">加载中…</option>';
+  note.textContent='正在向上游请求模型列表…';
+  $('test-reload').disabled=true;
+  try{
+    const r=await fetch(API_BASE+'/api/models?upstream='+encodeURIComponent(name),
+      {headers:{'Authorization':'Bearer '+tok()}});
+    if(r.status===401){logoutLocal();return;}
+    const data=await r.json();
+    if(!r.ok){
+      // An upstream refusing to list models says nothing about whether it can
+      // serve a completion, so keep the hand-typed field usable.
+      sel.innerHTML='<option value="">（列表不可用，请手填）</option>';
+      note.textContent='取模型列表失败：'+((data&&data.error)||r.status)+' — 仍可手填模型测试';
+      return;
+    }
+    const models=Array.isArray(data)?data:[];
+    if(!models.length){
+      sel.innerHTML='<option value="">（上游未返回任何模型）</option>';
+      note.textContent='上游模型列表为空，请手填模型';
+      return;
+    }
+    testModels=models;
+    // Decide the model before rendering, so the list opens with it selected.
+    autoPickTestModel(models);
+    renderTestModels();
+  }catch(e){
+    sel.innerHTML='<option value="">（列表不可用，请手填）</option>';
+    note.textContent='取模型列表失败：'+e.message+' — 仍可手填模型测试';
+  }finally{
+    $('test-reload').disabled=false;
+  }
+}
+
+// autoPickTestModel points the model field at something that will actually work.
+// A remembered choice the upstream no longer lists is kept -- the user may know
+// about a model the listing omits -- but one the upstream reports as unusable is
+// replaced, since opening on it guarantees a failed test.
+function autoPickTestModel(models){
+  const cur=($('test-model').value||'').trim();
+  const hit=cur?models.find(m=>m.id===cur):null;
+  const firstOK=models.find(m=>m.available)||models[0];
+  if(hit&&hit.available)return;
+  if(hit&&!hit.available&&firstOK&&firstOK.available){
+    $('test-model').value=firstOK.id;
+    testNoteExtra='上次用的 '+cur+' 当前不可用'+
+      (hit.reason?'（'+hit.reason+'）':'')+'，已改为 '+firstOK.id;
+    return;
+  }
+  if(hit)return; // listed but nothing usable to swap to: leave the choice alone
+  if(!curTest.explicit&&firstOK)$('test-model').value=firstOK.id;
+}
+
+// renderTestModels rebuilds the picker from the cached listing. A long listing is
+// mostly unusable entries, so unavailable models are hidden by default rather
+// than making the user scroll past them.
+function renderTestModels(){
+  const sel=$('test-model-list'),note=$('test-models-note');
+  if(!testModels.length)return;
+  const q=($('test-model-filter').value||'').trim().toLowerCase();
+  const onlyAvail=$('test-only-avail').checked;
+  let list=testModels;
+  if(onlyAvail)list=list.filter(m=>m.available);
+  if(q)list=list.filter(m=>m.id.toLowerCase().includes(q));
+
+  const usable=testModels.filter(m=>m.available).length;
+  if(!list.length){
+    sel.innerHTML='<option value="">（无匹配，可清空过滤或直接手填）</option>';
+  }else{
+    sel.innerHTML=list.map(m=>{
+      const bad=m.available?'':' · 不可用'+(m.reason?'（'+esc(m.reason)+'）':'');
+      return '<option value="'+esc(m.id)+'">'+esc(m.id)+bad+'</option>';
+    }).join('');
+    // Keep the picker on the field's model whenever the filter still shows it.
+    const cur=($('test-model').value||'').trim();
+    if(cur&&list.some(m=>m.id===cur))sel.value=cur;
+    else sel.selectedIndex=-1;
+  }
+
+  let msg='显示 '+list.length+' / 共 '+testModels.length+' 个模型（可用 '+usable+'）';
+  if(onlyAvail&&usable<testModels.length)msg+=' · 取消「仅可用」可看全部';
+  if(testNoteExtra)msg+='；'+testNoteExtra;
+  note.textContent=msg;
+}
+
+function pickTestModel(v){
+  if(v){$('test-model').value=v;curTest.explicit=true;}
+}
+
+async function runTest(){
+  const name=curTest.name,proto=curTest.proto;
+  if(!name)return;
+  const model=($('test-model').value||'').trim();
+  if(!model){
+    $('test-body').textContent='请先选择或填写一个模型。';
+    return;
+  }
+  try{localStorage.setItem('testModel:'+name,model);}catch(e){}
+  curTest.explicit=true;
+  const stream=$('test-stream').checked;
+
+  $('test-dot').style.background='var(--dim)';
   $('test-duration').textContent='测试中…';
   $('test-body').textContent='正在向该上游发送一条最小 chat 请求…';
-  $('test-modal').classList.remove('hidden');
+  $('test-run').disabled=true;
+  $('test-run').textContent='测试中…';
+  if(testAbort)testAbort.abort();
+  testAbort=new AbortController();
   const t0=performance.now();
-  // minimal request body per protocol
-  let body;
-  if(proto==='anthropic'){
-    body=JSON.stringify({model:"claude-sonnet-4-20250514",messages:[{role:"user",content:"hi"}],max_tokens:20,stream_options:{include_usage:true}});
-  }else{
-    body=JSON.stringify({model:"gpt-4o-mini",messages:[{role:"user",content:"hi"}],max_tokens:20,stream_options:{include_usage:true}});
+
+  // max_tokens is generous on purpose: a reasoning model can spend a small
+  // budget entirely on hidden thinking and return empty visible text, which
+  // looks like a broken upstream but is not.
+  const req={model:model,messages:[{role:'user',content:'hi'}],max_tokens:4096};
+  if(stream){
+    req.stream=true;
+    // Only valid alongside stream:true, which is why it is not set otherwise.
+    if(proto!=='anthropic')req.stream_options={include_usage:true};
   }
+
   try{
     const r=await fetch(API_BASE+'/api/test',{
       method:'POST',
-      headers:{'Content-Type':'application/json','X-LLMPROXY-Upstream':name,'X-LLMPROXY-Protocol':proto,'Authorization':'Bearer '+tok()},
-      body
+      headers:{'Content-Type':'application/json','X-LLMPROXY-Upstream':name,
+               'X-LLMPROXY-Protocol':proto,'Authorization':'Bearer '+tok()},
+      body:JSON.stringify(req),
+      signal:testAbort.signal
     });
+    if(r.status===401){logoutLocal();return;}
+    const ttfb=Math.round(performance.now()-t0);
+    $('test-dot').style.background=r.ok?'var(--ok)':'var(--err)';
+
+    // An error answer is JSON even when streaming was requested, so branch on
+    // the content type actually returned rather than on what was asked for.
+    const ctype=(r.headers.get('Content-Type')||'').toLowerCase();
+    if(!r.body||!r.body.getReader||!ctype.includes('text/event-stream')){
+      const text=await r.text();
+      let out;
+      try{out=JSON.stringify(JSON.parse(text),null,2);}catch(e){out=text;}
+      if(out.length>15000)out=out.slice(0,15000)+'\n… [截断]';
+      $('test-duration').textContent='耗时 '+Math.round(performance.now()-t0)+'ms · 状态 '+r.status;
+      $('test-body').textContent=out||'(空响应)';
+      return;
+    }
+
+    // Render each chunk as it lands, so the dialog shows progress instead of a
+    // frozen pane until the whole answer arrives.
+    const reader=r.body.getReader(),dec=new TextDecoder();
+    let buf='',text='',realModel='',usage=null,events=0;
+    const pane=$('test-body');
+    const paint=()=>{
+      // Measure before writing: afterwards scrollTop is already clamped to the
+      // taller content and every position looks like "at the bottom".
+      const atBottom=pane.scrollHeight-pane.scrollTop-pane.clientHeight<24;
+      const head='状态 '+r.status+' · 首字节 '+ttfb+'ms'+(realModel?' · 模型 '+realModel:'')+
+        '\n'+'-'.repeat(40)+'\n';
+      pane.textContent=head+(text||'(等待输出…)');
+      if(atBottom)pane.scrollTop=pane.scrollHeight;
+    };
+    paint();
+
+    while(true){
+      const {done,value}=await reader.read();
+      if(done)break;
+      buf+=dec.decode(value,{stream:true});
+      let nl;
+      while((nl=buf.indexOf('\n'))>=0){
+        const line=buf.slice(0,nl).trim();
+        buf=buf.slice(nl+1);
+        if(!line.startsWith('data:'))continue;
+        const payload=line.slice(5).trim();
+        if(!payload||payload==='[DONE]')continue;
+        events++;
+        let d;
+        try{d=JSON.parse(payload);}catch(e){continue;}
+        if(d.model)realModel=d.model;
+        else if(d.message&&d.message.model)realModel=d.message.model;
+        if(d.usage)usage=d.usage;
+        else if(d.message&&d.message.usage)usage=d.message.usage;
+        // OpenAI carries the increment in choices[].delta.content, Anthropic in
+        // delta.text on content_block_delta events.
+        const ch=(d.choices&&d.choices[0])||null;
+        if(ch&&ch.delta&&typeof ch.delta.content==='string')text+=ch.delta.content;
+        else if(d.delta&&typeof d.delta.text==='string')text+=d.delta.text;
+        paint();
+      }
+    }
+
     const dur=Math.round(performance.now()-t0);
-    $('test-duration').textContent=`耗时 ${dur}ms · 状态 ${r.status}`;
-    $('test-dot').style.background = r.ok ? 'var(--ok)' : 'var(--err)';
-    const data=await r.text();
-    let out;
-    try{out=JSON.stringify(JSON.parse(data),null,2);}catch(e){out=data;}
-    if(out.length>15000)out=out.slice(0,15000)+'\n… [截断]';
-    $('test-body').textContent=out;
+    let tail='\n'+'-'.repeat(40)+'\n完成 · '+events+' 个事件 · 耗时 '+dur+'ms';
+    if(usage){
+      const pt=usage.prompt_tokens!=null?usage.prompt_tokens:(usage.input_tokens||0);
+      const ct=usage.completion_tokens!=null?usage.completion_tokens:(usage.output_tokens||0);
+      tail+='\ntoken: '+pt+' in / '+ct+' out';
+    }
+    if(!text){
+      tail+='\n注意：上游未返回可见文本。连接本身是通的，推理模型可能把额度用在了隐藏思考上。';
+    }
+    $('test-duration').textContent='耗时 '+dur+'ms · 状态 '+r.status;
+    pane.textContent=pane.textContent+tail;
+    pane.scrollTop=pane.scrollHeight;
   }catch(e){
+    if(e.name==='AbortError')return;
     $('test-dot').style.background='var(--err)';
     $('test-duration').textContent='连接失败';
     $('test-body').textContent='网络错误：'+e.message;
+  }finally{
+    testAbort=null;
+    $('test-run').disabled=false;
+    $('test-run').textContent='开始测试';
   }
 }
 
@@ -2006,7 +2268,7 @@ function renderCallsPage(){
       : '';
     return `<tr class="${x.ok?'':'row-err'} call-row" onclick="openTrace(${gi})">
     <td class="col-expand"><span class="expander" aria-hidden="true">›</span></td>
-    <td class="mono nowrap">${new Date(x.time).toLocaleTimeString()}</td>
+    <td class="mono nowrap">${fmtDateTime(x.time)}</td>
     <td class="mono truncate" title="${esc(x.router||'')}">${esc(x.router)}</td>
     <td class="truncate" title="${esc(up)}">${esc(up)}</td>
     <td>${badge(String(x.status_code), httpType(x.status_code))}</td>
@@ -2036,7 +2298,7 @@ function exportCallsCSV(){
   callData.forEach(c=>{
     out+=cols.map(col=>{
       let v=c[col[0]];
-      if(col[0]==='time')v=new Date(c.time).toLocaleString();
+      if(col[0]==='time')v=fmtDateTime(c.time);
       return escC(v);
     }).join(',')+'\r\n';
   });
@@ -2065,7 +2327,7 @@ function openTrace(idx){
   $('trace-body').innerHTML=`
     <div class="trace-sec"><h4>状态</h4><div style="display:flex;align-items:center;gap:10px;">${badge(String(c.status_code),t)} ${c.ok?badge('成功','ok'):(c.err_type?badge(c.err_type,'err'):badge('失败','err'))}</div></div>
     <div class="trace-sec"><h4>基本信息</h4><div class="trace-grid">
-      <div><span class="d-l">时间</span><span class="d-v">${new Date(c.time).toLocaleString()}</span></div>
+      <div><span class="d-l">时间</span><span class="d-v">${fmtDateTime(c.time)}</span></div>
       <div><span class="d-l">路由</span><span class="d-v mono">${esc(c.router||'-')}</span></div>
       <div><span class="d-l">客户端 Key</span><span class="d-v">${esc(c.client_key||'(开放)')}</span></div>
       <div><span class="d-l">上游</span><span class="d-v">${esc(c.upstream||'-')}</span></div>
@@ -2453,7 +2715,7 @@ async function loadOverview(){
   // recent failures card
   const fl=(calls||[]).filter(c=>c.status_code>=400||c.err_type).slice(0,6);
   const fc=$('ov-fails');
-  fc.innerHTML=fl.length?`<table class="ov-fail-tbl"><thead><tr><th>时间</th><th>上游</th><th>状态</th><th>错误</th></tr></thead><tbody>${fl.map(c=>`<tr><td class="mono">${new Date(c.time).toLocaleTimeString()}</td><td>${esc(c.upstream||'-')}</td><td>${badge(String(c.status_code||'-'), httpType(c.status_code))}</td><td class="ov-err-cell" title="${esc(c.err_detail||'')}">${esc(c.err_type||'-')}</td></tr>`).join('')}</tbody></table>`:'<div class="ov-empty">近 50 次调用无失败记录</div>';
+  fc.innerHTML=fl.length?`<table class="ov-fail-tbl"><thead><tr><th>时间</th><th>上游</th><th>状态</th><th>错误</th></tr></thead><tbody>${fl.map(c=>`<tr><td class="mono nowrap">${fmtDateTime(c.time)}</td><td>${esc(c.upstream||'-')}</td><td>${badge(String(c.status_code||'-'), httpType(c.status_code))}</td><td class="ov-err-cell" title="${esc(c.err_detail||'')}">${esc(c.err_type||'-')}</td></tr>`).join('')}</tbody></table>`:'<div class="ov-empty">近 50 次调用无失败记录</div>';
 
   // mini hourly trend (bars = call count, line = success rate)
   renderOverviewTrend(todayS);
