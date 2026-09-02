@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -14,6 +15,22 @@ type ctxKey string
 
 // ctxKeyClient carries the authenticated client key name across the call.
 const ctxKeyClient ctxKey = "clientKey"
+
+// ctxKeyTrusted marks a request that the admin layer has already authenticated
+// (the dashboard's upstream test). Such a request carries a panel JWT rather
+// than a client key, so the client-key gate must not run on it.
+const ctxKeyTrusted ctxKey = "trusted"
+
+// withTrusted marks ctx as already-authenticated by the admin layer.
+func withTrusted(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ctxKeyTrusted, true)
+}
+
+// trusted reports whether the admin layer already authenticated this request.
+func trusted(ctx context.Context) bool {
+	v, _ := ctx.Value(ctxKeyTrusted).(bool)
+	return v
+}
 
 // clientKeyFrom reads the client key name from a request context ("" if none).
 func clientKeyFrom(r *http.Request) string {

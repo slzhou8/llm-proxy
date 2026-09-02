@@ -85,11 +85,18 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Authenticate the caller against configured client keys before doing any
 	// work. In open mode (no keys configured) clientKey is "" and the call
-	// proceeds unauthenticated.
-	clientKey, autherr := p.authenticateClient(r.Header.Get("Authorization"))
-	if autherr != nil {
-		writeAuthError(w, autherr)
-		return
+	// proceeds unauthenticated. Requests marked trusted came from the dashboard's
+	// upstream test, which the admin layer already authenticated with a panel
+	// JWT; running the client-key gate on them would reject that JWT as an
+	// invalid client key.
+	var clientKey string
+	if !trusted(ctx) {
+		var autherr error
+		clientKey, autherr = p.authenticateClient(r.Header.Get("Authorization"))
+		if autherr != nil {
+			writeAuthError(w, autherr)
+			return
+		}
 	}
 	// Carry the client key on the request context so record()/token accounting
 	// stay per-request safe under concurrency.
@@ -280,15 +287,24 @@ func (p *Proxy) sendOne(ctx context.Context, up config.Upstream, r *http.Request
 	// Copy headers verbatim, dropping hop-by-hop ones and the routing hint.
 	copyHeaders(outReq.Header, r.Header)
 	outReq.Header.Del("X-LLMPROXY-Protocol")
+	outReq.Header.Del("X-LLMPROXY-Upstream")
 	// Strip any inbound proxy-delimited headers we must not leak.
 	stripHopHeaders(outReq.Header)
 
 	// Apply upstream auth based on protocol.
 	switch up.Protocol {
 	case config.ProtocolAnthropic:
-		if origXAPIKey != "" {
-			outReq.Header.Set("x-api-key", up.APIKey)
-		}
+		// Always present the upstream's own credential, even when the caller
+		// authenticated some other way (the dashboard test sends only a panel
+		// JWT). Keying off the inbound x-api-key instead would send this upstream
+		// no usable credential at all.
+		outReq.Header.Set("x-api-key", up.APIKey)
+		// Anthropic authenticates via x-api-key, so any inbound Authorization is
+		// the caller's credential to *this* proxy (a client key, or the panel JWT
+		// on a dashboard test). It is never valid upstream and must not be leaked
+		// to a third party. A gateway that wants Bearer instead can set it back
+		// via the upstream's extra_headers, which are merged below.
+		outReq.Header.Del("Authorization")
 		if v := r.Header.Get("anthropic-version"); v != "" {
 			// keep the client's version verbatim; the proxy adds nothing
 		}
@@ -374,7 +390,22 @@ func splitSSEData(b []byte) [][]byte {
 // dashboard. It reuses ServeHTTP behaviour but runs on the admin response
 // writer.
 func (p *Proxy) TestThrough(w http.ResponseWriter, r *http.Request) {
-	p.ServeHTTP(w, r)
+	// The admin layer has already authenticated this caller; mark it so the
+	// client-key gate is skipped rather than rejecting the panel JWT.
+	out := r.Clone(withTrusted(r.Context()))
+
+	// The dashboard posts to /api/test, but the upstream must receive a real
+	// inference path -- forwarding "/api/test" verbatim makes the upstream 404.
+	// Rewrite it to the canonical path for the protocol under test.
+	switch detectProtocol(r) {
+	case config.ProtocolAnthropic:
+		out.URL.Path = "/v1/messages"
+	default:
+		out.URL.Path = "/v1/chat/completions"
+	}
+	out.URL.RawQuery = ""
+
+	p.ServeHTTP(w, out)
 }
 
 // pinnedGroup returns a single-upstream group when the dashboard pins a test
