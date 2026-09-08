@@ -195,12 +195,39 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			// Success, or an error that belongs to the caller (400/404): hand it
 			// back verbatim. Trying another upstream would not change the answer.
 			if !p.retryable(cls) && !failoverable(cls) {
-				err = p.streamBack(w, r, resp, up, start, proto, cls, detail, attempts, failovers)
+				committed, serr := p.streamBack(w, r, resp, up, start, proto, cls, detail, attempts, failovers)
 				_ = resp.Body.Close()
-				if err != nil {
-					slog.Warn("streaming back failed", "err", err)
+				if serr == nil {
+					return
 				}
-				return
+				slog.Warn("streaming back failed", "err", serr, "committed", committed)
+				if committed {
+					// Bytes have already reached the caller and headers cannot be
+					// unwritten, so no recovery is possible for this request.
+					return
+				}
+				// Nothing went out yet: this upstream still owes a usable answer,
+				// so treat it as a failed attempt and honour the retry budget
+				// instead of abandoning the caller with an empty response.
+				scls := classifyTransport(serr)
+				lastUp = up
+				lastClass = scls
+				lastDetail = serr.Error()
+				lastOK = false
+				lastStatus = http.StatusBadGateway
+				lastBody.Reset()
+				lastBody.WriteString(`{"error":{"message":"upstream stream error: ` + jsonEscape(serr.Error()) + `","type":"proxy_error"}}`)
+				if cls == ErrNone && attempt < p.maxAttempts() {
+					if d := p.backoff(attempt); waitFits(deadline, d) && sleep(ctx, d) {
+						continue
+					}
+					timedOut = true
+				}
+				if i < len(group)-1 {
+					failovers++
+				}
+				p.recordHealth(up.Name, false, scls)
+				break
 			}
 
 			// Buffer the body so it can be replayed as the final response if every
@@ -320,16 +347,22 @@ func (p *Proxy) sendOne(ctx context.Context, up config.Upstream, r *http.Request
 	return p.client.Do(outReq)
 }
 
-// streamBack writes the upstream response verbatim to the client, header first,
-// then streaming the body. For SSE / chunked responses it flushes after every
-// read so chunks reach the client as they arrive instead of being buffered
-// into one block. While forwarding, it tees the bytes into a bounded buffer so
-// token/model/provider can be parsed afterwards without altering what the
-// client receives.
-func (p *Proxy) streamBack(w http.ResponseWriter, r *http.Request, resp *http.Response, up config.Upstream, start time.Time, proto config.Protocol, cls ErrClass, detail string, attempts, failovers int) error {
-	copyHeaders(w.Header(), resp.Header)
-	w.WriteHeader(resp.StatusCode)
-
+// streamBack writes the upstream response verbatim to the client and streams the
+// body. For SSE / chunked responses it flushes after every read so chunks reach
+// the client as they arrive instead of being buffered into one block. While
+// forwarding, it tees the bytes into a bounded buffer so token/model/provider can
+// be parsed afterwards without altering what the client receives.
+//
+// It returns whether anything was already committed to the client, plus any error
+// that ended the transfer.
+//
+// Status and headers are deliberately withheld until the first body byte arrives.
+// An upstream that dies before emitting anything therefore leaves the response
+// uncommitted, so the caller can still retry under the normal policy instead of
+// handing the caller a truncated answer. Once bytes have gone out that option is
+// gone -- HTTP headers cannot be unwritten -- so a later truncation is recorded as
+// a failure rather than silently counted as a success.
+func (p *Proxy) streamBack(w http.ResponseWriter, r *http.Request, resp *http.Response, up config.Upstream, start time.Time, proto config.Protocol, cls ErrClass, detail string, attempts, failovers int) (committed bool, err error) {
 	isSSE := strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream")
 
 	flusher, _ := w.(http.Flusher)
@@ -340,10 +373,25 @@ func (p *Proxy) streamBack(w http.ResponseWriter, r *http.Request, resp *http.Re
 	const sideCap = 256 * 1024
 	var side bytes.Buffer
 
+	// Lazily emit status/headers on the first byte, so an upstream that never
+	// produces a body cannot leave the client holding a half-written answer.
+	wrote := false
+	commit := func() {
+		if wrote {
+			return
+		}
+		copyHeaders(w.Header(), resp.Header)
+		w.WriteHeader(resp.StatusCode)
+		wrote = true
+	}
+
+	var streamErr error
 	for {
 		n, rerr := resp.Body.Read(buf)
 		if n > 0 {
+			commit()
 			if _, werr := w.Write(buf[:n]); werr != nil {
+				streamErr = werr
 				break
 			}
 			if flusher != nil {
@@ -354,20 +402,40 @@ func (p *Proxy) streamBack(w http.ResponseWriter, r *http.Request, resp *http.Re
 			}
 		}
 		if rerr != nil {
-			break // io.EOF or upstream closed
+			// io.EOF is how a healthy stream ends; anything else means the
+			// upstream died part-way through its answer.
+			if rerr != io.EOF {
+				streamErr = rerr
+			}
+			break
 		}
+	}
+	// A clean transfer with an empty body still owes the client its status code.
+	if streamErr == nil {
+		commit()
 	}
 
-	enr := enrichment{}
-	if cls == ErrNone && side.Len() > 0 {
-		if isSSE {
-			enr = parseSSE(splitSSEData(side.Bytes()))
-		} else {
-			enr = parseBody(side.Bytes())
-		}
+	ok := cls == ErrNone && streamErr == nil
+	if streamErr != nil {
+		cls = classifyTransport(streamErr)
+		detail = "stream interrupted: " + streamErr.Error()
 	}
-	p.record(r, up, proto, start, resp.StatusCode, cls == ErrNone, cls, detail, attempts, failovers, enr)
-	return nil
+
+	// Record only attempts that either reached the caller or finished cleanly. An
+	// uncommitted failure gets retried and the retry records the outcome itself;
+	// writing both would double-count one client request in the dashboard.
+	if wrote || streamErr == nil {
+		enr := enrichment{}
+		if ok && side.Len() > 0 {
+			if isSSE {
+				enr = parseSSE(splitSSEData(side.Bytes()))
+			} else {
+				enr = parseBody(side.Bytes())
+			}
+		}
+		p.record(r, up, proto, start, resp.StatusCode, ok, cls, detail, attempts, failovers, enr)
+	}
+	return wrote, streamErr
 }
 
 // splitSSEData splits an accumulated SSE byte stream into its `data:` lines.
@@ -456,6 +524,14 @@ func (p *Proxy) CurrentConfig() *config.Config {
 // record logs one call into the stats store. enr carries best-effort
 // token/model/provider parsed from the response (zero value when unavailable).
 func (p *Proxy) record(r *http.Request, up config.Upstream, proto config.Protocol, start time.Time, status int, ok bool, cls ErrClass, detail string, attempts, failovers int, enr enrichment) {
+	// A successful call carries no error classification. Some success paths
+	// inherit a non-empty detail (e.g. http.StatusText(200) == "OK"); clearing
+	// it here keeps the stored record honest so the dashboard never renders a
+	// red "error" badge for a call that actually succeeded.
+	if ok {
+		cls = ErrNone
+		detail = ""
+	}
 	clientKey := clientKeyFrom(r)
 	// Charge tokens against the calling client key's quota.
 	if enr.TotalTokens > 0 {

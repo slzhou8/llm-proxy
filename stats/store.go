@@ -63,6 +63,17 @@ type DayAgg struct {
 	DurationSum      int64            `json:"duration_sum"`     // sum of duration_ms; avg latency = DurationSum/Total
 	ByHour           [24]int64        `json:"by_hour"`          // request count per hour (local time), for same-day trend
 	ByKey            map[string]int64 `json:"by_key,omitempty"` // client key name -> total tokens
+	ByModel          map[string]*ModelAgg `json:"by_model,omitempty"` // real model -> call/token roll-up
+}
+
+// ModelAgg is the per-day roll-up for a single real model (the model the
+// upstream actually served, which may differ from the requested one when the
+// client asked for "auto" or a router alias).
+type ModelAgg struct {
+	Total       int64 `json:"total"`
+	OK          int64 `json:"ok"`
+	Failed      int64 `json:"failed"`
+	TotalTokens int64 `json:"total_tokens"`
 }
 
 // Store is concurrency-safe. It keeps a bounded recent-call buffer purely in
@@ -144,6 +155,20 @@ func (s *Store) RecordCall(c Call) {
 	case "business":
 		d.BusinessErr++
 	}
+	if c.RealModel != "" {
+		m := d.ByModel[c.RealModel]
+		if m == nil {
+			m = &ModelAgg{}
+			d.ByModel[c.RealModel] = m
+		}
+		m.Total++
+		if c.OK {
+			m.OK++
+		} else {
+			m.Failed++
+		}
+		m.TotalTokens += int64(c.TotalTokens)
+	}
 }
 
 // Recent returns up to n most recent calls in chronological order.
@@ -170,6 +195,12 @@ func (s *Store) Snapshot() map[string]*DayAgg {
 			c.ByKey = make(map[string]int64, len(v.ByKey))
 			for kk, n := range v.ByKey {
 				c.ByKey[kk] = n
+			}
+		}
+		if v.ByModel != nil {
+			c.ByModel = make(map[string]*ModelAgg, len(v.ByModel))
+			for kk, n := range v.ByModel {
+				c.ByModel[kk] = &ModelAgg{Total: n.Total, OK: n.OK, Failed: n.Failed, TotalTokens: n.TotalTokens}
 			}
 		}
 		out[k] = &c
@@ -203,6 +234,12 @@ func (s *Store) Range(from, to string) RangeResult {
 				c.ByKey[k] = n
 			}
 		}
+		if v.ByModel != nil {
+			c.ByModel = make(map[string]*ModelAgg, len(v.ByModel))
+			for k, n := range v.ByModel {
+				c.ByModel[k] = &ModelAgg{Total: n.Total, OK: n.OK, Failed: n.Failed, TotalTokens: n.TotalTokens}
+			}
+		}
 		res.Days[day] = &c
 		res.Total.Total += v.Total
 		res.Total.OK += v.OK
@@ -224,6 +261,20 @@ func (s *Store) Range(from, to string) RangeResult {
 				res.Total.ByKey = map[string]int64{}
 			}
 			res.Total.ByKey[k] += n
+		}
+		for k, n := range v.ByModel {
+			if res.Total.ByModel == nil {
+				res.Total.ByModel = map[string]*ModelAgg{}
+			}
+			a := res.Total.ByModel[k]
+			if a == nil {
+				a = &ModelAgg{}
+				res.Total.ByModel[k] = a
+			}
+			a.Total += n.Total
+			a.OK += n.OK
+			a.Failed += n.Failed
+			a.TotalTokens += n.TotalTokens
 		}
 	}
 	return res

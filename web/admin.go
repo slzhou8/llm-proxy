@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
@@ -45,6 +46,7 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/calls", s.requireAuth(s.apiCalls))
 	mux.HandleFunc("/api/stats", s.requireAuth(s.apiStats))
 	mux.HandleFunc("/api/stats/range", s.requireAuth(s.apiStatsRange))
+	mux.HandleFunc("/api/stats/models", s.requireAuth(s.apiStatsModels))
 	mux.HandleFunc("/api/health", s.requireAuth(s.apiHealth))
 	// /healthz is unauthenticated: it returns only {ok:true} so probes, load
 	// balancers, and monitoring services can confirm the process is alive without
@@ -298,6 +300,45 @@ func (s *Server) apiStatsRange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, http.StatusOK, s.store.Range(from, to))
+}
+
+// apiStatsModels returns a per-model call/token roll-up for [from,to] inclusive,
+// sorted by call volume descending so the dashboard can render a ranking chart.
+func (s *Server) apiStatsModels(w http.ResponseWriter, r *http.Request) {
+	from := r.URL.Query().Get("from")
+	to := r.URL.Query().Get("to")
+	if from == "" || to == "" {
+		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": "from and to required (YYYY-MM-DD)"})
+		return
+	}
+	res := s.store.Range(from, to)
+	type Row struct {
+		Model       string `json:"model"`
+		Total       int64  `json:"total"`
+		OK          int64  `json:"ok"`
+		Failed      int64  `json:"failed"`
+		TotalTokens int64  `json:"total_tokens"`
+	}
+	agg := map[string]*Row{}
+	for _, d := range res.Days {
+		for name, m := range d.ByModel {
+			a := agg[name]
+			if a == nil {
+				a = &Row{Model: name}
+				agg[name] = a
+			}
+			a.Total += m.Total
+			a.OK += m.OK
+			a.Failed += m.Failed
+			a.TotalTokens += m.TotalTokens
+		}
+	}
+	rows := make([]Row, 0, len(agg))
+	for _, a := range agg {
+		rows = append(rows, *a)
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].Total > rows[j].Total })
+	s.writeJSON(w, http.StatusOK, rows)
 }
 
 // UpstreamHealth is the per-upstream rollup computed from recent calls.

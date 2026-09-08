@@ -349,6 +349,18 @@ tbody tr:last-child td{border-bottom:none;}
 .chart-tip .ct-row .ct-k{color:var(--dim);}
 .chart-tip.hidden{opacity:0;visibility:hidden;}
 
+/* ============ Model ranking (stats report) ============ */
+.rk-row{display:flex;align-items:center;gap:12px;padding:9px 4px;border-bottom:1px solid var(--border);}
+.rk-row:last-child{border-bottom:none;}
+.rk-rank{flex:0 0 22px;height:22px;border-radius:6px;background:var(--panel-2);color:var(--dim);font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;}
+.rk-main{flex:1;min-width:0;}
+.rk-top{display:flex;justify-content:space-between;gap:10px;margin-bottom:5px;font-size:13px;}
+.rk-name{font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.rk-val{color:var(--dim);font-size:12px;white-space:nowrap;}
+.rk-bar{height:8px;border-radius:4px;background:var(--border);overflow:hidden;}
+.rk-fill{height:100%;border-radius:4px;transition:width .25s ease;}
+.rk-rate{flex:0 0 46px;text-align:right;font-size:13px;font-weight:600;}
+
 /* ============ Toast notifications ============ */
 #toasts{
   position:fixed;bottom:24px;right:24px;z-index:100;display:flex;flex-direction:column;gap:10px;
@@ -852,6 +864,7 @@ tr.up-row-broken:hover{opacity:1;}
           <th class="sortable" data-table="calls" data-sort="time">时间</th>
           <th class="sortable" data-table="calls" data-sort="router">路由</th>
           <th class="sortable" data-table="calls" data-sort="upstream">上游</th>
+          <th class="sortable" data-table="calls" data-sort="real_model">真实模型</th>
           <th class="sortable num" data-table="calls" data-sort="status_code" data-type="num">状态</th>
           <th class="sortable num" data-table="calls" data-sort="duration_ms" data-type="num">耗时</th>
           <th class="sortable num" data-table="calls" data-sort="total_tokens" data-type="num">token</th>
@@ -908,6 +921,10 @@ tr.up-row-broken:hover{opacity:1;}
       <h2 id="trend-title">请求次数趋势</h2>
       <div class="overflow"><div id="trend-chart"></div></div>
       <div id="chart-tip" class="chart-tip hidden"></div>
+    </div>
+    <div class="card">
+      <h2>按模型调用量排行</h2>
+      <div class="overflow"><div id="stats-bymodel"></div></div>
     </div>
     <div class="card">
       <h2>按客户端 Key 的 Token 用量</h2>
@@ -2271,6 +2288,7 @@ function renderCallsPage(){
     <td class="mono nowrap">${fmtDateTime(x.time)}</td>
     <td class="mono truncate" title="${esc(x.router||'')}">${esc(x.router)}</td>
     <td class="truncate" title="${esc(up)}">${esc(up)}</td>
+    <td class="truncate mono" title="${esc(x.real_model||'')}">${esc(x.real_model||'-')}</td>
     <td>${badge(String(x.status_code), httpType(x.status_code))}</td>
     <td class="num nowrap">${fmtMs(x.duration_ms)}</td>
     <td class="num nowrap">${tot?fmtNum(tot):'-'}</td>
@@ -2278,7 +2296,7 @@ function renderCallsPage(){
   </tr>`;
   });
   tbl.innerHTML=total?rows.join(''):
-    '<tr><td colspan="8" style="color:var(--dim);text-align:center;padding:28px;">'+
+    '<tr><td colspan="9" style="color:var(--dim);text-align:center;padding:28px;">'+
       (tbl.dataset.filled?'筛选后无匹配记录':'暂无调用记录')+
     '</td></tr>';
   syncSortHeaders('calls');
@@ -2323,7 +2341,11 @@ function openTrace(idx){
   const t=httpType(c.status_code);
   $('trace-dot').className='dot '+t;
   const chain=buildTraceChain(c);
-  const errBlock=(c.err_type||c.err_detail)?`<div class="trace-sec"><h4>错误信息</h4><div class="trace-err" id="trace-err-${idx}">${esc(c.err_detail||c.err_type||'-')}</div><div class="trace-copy"><button class="btn ghost sm" onclick="copyText('trace-err-${idx}',this)">复制错误</button></div></div>`:'';
+  // Only show the error block for genuine failures. A successful call must never
+  // surface a red "error" box -- guarding on !c.ok also neutralises any stale
+  // "OK" detail left in historical records before the backend fix shipped.
+  const hasErr=(c.err_type||c.err_detail) && !c.ok;
+  const errBlock=hasErr?`<div class="trace-sec"><h4>错误信息</h4><div class="trace-err" id="trace-err-${idx}">${esc(c.err_detail||c.err_type||'-')}</div><div class="trace-copy"><button class="btn ghost sm" onclick="copyText('trace-err-${idx}',this)">复制错误</button></div></div>`:'';
   $('trace-body').innerHTML=`
     <div class="trace-sec"><h4>状态</h4><div style="display:flex;align-items:center;gap:10px;">${badge(String(c.status_code),t)} ${c.ok?badge('成功','ok'):(c.err_type?badge(c.err_type,'err'):badge('失败','err'))}</div></div>
     <div class="trace-sec"><h4>基本信息</h4><div class="trace-grid">
@@ -2416,6 +2438,10 @@ async function loadStats(from,to){
   const byKey=t.by_key||{};
   const keyNames=Object.keys(byKey).sort((a,b)=>byKey[b]-byKey[a]);
   $('stats-bykey').innerHTML=keyNames.length?keyNames.map(k=>`<tr><td style="font-weight:500;">${esc(k)}</td><td>${fmtNum(byKey[k])}</td></tr>`).join(''):emptyState('activity','暂无用量数据','当前时间范围内没有按 Key 维度的调用记录');
+  try {
+    const mrows=await j(`/api/stats/models?from=${from}&to=${to}`);
+    renderModelRanking(mrows);
+  } catch(e){ renderModelRanking(null); }
   const dayArr=Object.keys(s.days||{}).map(d=>Object.assign({date:d},s.days[d]));
   const sortedDays=applySort(dayArr,'days');
   $('stats-days').innerHTML=sortedDays.length?sortedDays.map(v=>{return `<tr>
@@ -2423,6 +2449,29 @@ async function loadStats(from,to){
     <td>${v.rate_limit}</td><td>${v.timeout}</td><td>${v.network}</td><td>${v.server_err}</td>
     <td>${fmtNum(v.prompt_tokens||0)}</td><td>${fmtNum(v.completion_tokens||0)}</td><td>${fmtNum(v.total_tokens||0)}</td></tr>`;}).join(''):'<tr><td colspan="11" style="color:var(--dim);text-align:center;padding:24px;">该范围暂无数据</td></tr>';
   syncSortHeaders('days');
+}
+
+// renderModelRanking draws a horizontal bar chart ranking models by call volume
+// across the current stats range. Models with no calls are simply absent.
+function renderModelRanking(rows){
+  const host=$('stats-bymodel');
+  if(!host)return;
+  if(!rows||!rows.length){host.innerHTML=emptyState('chart','暂无模型调用','该范围内没有按模型维度的调用记录');return;}
+  const max=Math.max(1,...rows.map(r=>r.total));
+  host.innerHTML=rows.map((r,i)=>{
+    const pct=Math.max(3,Math.round(r.total/max*100));
+    const rate=r.total>0?Math.round(r.ok/r.total*100):0;
+    const col=i<3?'var(--chart-bar)':'var(--border-strong)';
+    const rc=rate>=95?'var(--ok)':rate>=80?'var(--warn)':'var(--err)';
+    return `<div class="rk-row">
+      <div class="rk-rank">${i+1}</div>
+      <div class="rk-main">
+        <div class="rk-top"><span class="rk-name">${esc(r.model)}</span><span class="rk-val">${fmtNum(r.total)} 次 · ${fmtNum(r.total_tokens)} tok</span></div>
+        <div class="rk-bar"><div class="rk-fill" style="width:${pct}%;background:${col}"></div></div>
+      </div>
+      <div class="rk-rate" style="color:${rc}">${rate}%</div>
+    </div>`;
+  }).join('');
 }
 
 // renderTrend draws a simple SVG bar chart. Same-day range -> 24 hourly bars;
