@@ -49,20 +49,20 @@ type Record struct {
 
 // DayAgg is per-day roll-up. Keyed by YYYY-MM-DD.
 type DayAgg struct {
-	Total            int64            `json:"total"`
-	OK               int64            `json:"ok"`
-	Failed           int64            `json:"failed"`
-	RateLimit        int64            `json:"rate_limit"`
-	Timeout          int64            `json:"timeout"`
-	Network          int64            `json:"network"`
-	ServerErr        int64            `json:"server_err"`
-	BusinessErr      int64            `json:"business_err"`
-	PromptTokens     int64            `json:"prompt_tokens"`
-	CompletionTokens int64            `json:"completion_tokens"`
-	TotalTokens      int64            `json:"total_tokens"`
-	DurationSum      int64            `json:"duration_sum"`     // sum of duration_ms; avg latency = DurationSum/Total
-	ByHour           [24]int64        `json:"by_hour"`          // request count per hour (local time), for same-day trend
-	ByKey            map[string]int64 `json:"by_key,omitempty"` // client key name -> total tokens
+	Total            int64                `json:"total"`
+	OK               int64                `json:"ok"`
+	Failed           int64                `json:"failed"`
+	RateLimit        int64                `json:"rate_limit"`
+	Timeout          int64                `json:"timeout"`
+	Network          int64                `json:"network"`
+	ServerErr        int64                `json:"server_err"`
+	BusinessErr      int64                `json:"business_err"`
+	PromptTokens     int64                `json:"prompt_tokens"`
+	CompletionTokens int64                `json:"completion_tokens"`
+	TotalTokens      int64                `json:"total_tokens"`
+	DurationSum      int64                `json:"duration_sum"`       // sum of duration_ms; avg latency = DurationSum/Total
+	ByHour           [24]int64            `json:"by_hour"`            // request count per hour (local time), for same-day trend
+	ByKey            map[string]int64     `json:"by_key,omitempty"`   // client key name -> total tokens
 	ByModel          map[string]*ModelAgg `json:"by_model,omitempty"` // real model -> call/token roll-up
 }
 
@@ -156,6 +156,9 @@ func (s *Store) RecordCall(c Call) {
 		d.BusinessErr++
 	}
 	if c.RealModel != "" {
+		if d.ByModel == nil {
+			d.ByModel = map[string]*ModelAgg{}
+		}
 		m := d.ByModel[c.RealModel]
 		if m == nil {
 			m = &ModelAgg{}
@@ -332,5 +335,44 @@ func (s *Store) load() {
 	s.byDay = r.ByDay
 	if s.byDay == nil {
 		s.byDay = map[string]*DayAgg{}
+	}
+	// Rebuild ByModel roll-ups from the recent-call buffer. Historic persisted
+	// snapshots may have left by_model empty (a nil-map bug predating this fix).
+	// Only do a full rebuild when the persisted day aggregates carry no ByModel
+	// at all; once a correct snapshot exists it is trusted as-is to avoid
+	// double counting.
+	rebuild := true
+	for _, d := range s.byDay {
+		if len(d.ByModel) > 0 {
+			rebuild = false
+			break
+		}
+	}
+	if rebuild {
+		for _, c := range s.callBuf {
+			if c.RealModel == "" {
+				continue
+			}
+			day := c.Time.Format("2006-01-02")
+			d := s.byDay[day]
+			if d == nil {
+				continue
+			}
+			if d.ByModel == nil {
+				d.ByModel = map[string]*ModelAgg{}
+			}
+			m := d.ByModel[c.RealModel]
+			if m == nil {
+				m = &ModelAgg{}
+				d.ByModel[c.RealModel] = m
+			}
+			m.Total++
+			if c.OK {
+				m.OK++
+			} else {
+				m.Failed++
+			}
+			m.TotalTokens += int64(c.TotalTokens)
+		}
 	}
 }
