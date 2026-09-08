@@ -1,6 +1,5 @@
 # build output
-llmproxy.exe
-llmproxy
+llmproxy*
 *.exe
 
 # runtime data (generated)
