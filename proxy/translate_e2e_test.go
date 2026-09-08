@@ -105,3 +105,33 @@ func TestBridgeEndToEndStream(t *testing.T) {
 		t.Errorf("not OpenAI SSE:\n%s", body)
 	}
 }
+
+// TestBridgeErrorPassthrough checks that an Anthropic upstream error keeps its
+// status code and reaches an OpenAI client as an OpenAI-shaped error body,
+// instead of being mangled into an empty success completion.
+func TestBridgeErrorPassthrough(t *testing.T) {
+	anth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"type":"error","error":{"type":"invalid_request_error","message":"model not found: no-such-model"}}`))
+	}))
+	defer anth.Close()
+	p := bridgeProxy(t, anth.URL)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"no-such-model","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"model not found: no-such-model"`) {
+		t.Errorf("upstream error message lost:\n%s", body)
+	}
+	if strings.Contains(body, `"object":"chat.completion"`) {
+		t.Errorf("error must not be shaped as a success completion:\n%s", body)
+	}
+}

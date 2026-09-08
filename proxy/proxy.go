@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"math"
@@ -389,7 +390,13 @@ func (p *Proxy) sendOne(ctx context.Context, up config.Upstream, r *http.Request
 
 // translateResponse rewrites an Anthropic upstream response into OpenAI form for
 // an OpenAI-speaking caller, preserving streaming where the upstream used it.
+// Non-2xx upstream errors keep their status code and are converted to the OpenAI
+// error shape, so an OpenAI client still sees the real cause instead of an empty
+// success body.
 func (p *Proxy) translateResponse(resp *http.Response) *http.Response {
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return p.translateError(resp)
+	}
 	isSSE := strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream")
 	if !isSSE {
 		b, err := io.ReadAll(resp.Body)
@@ -397,6 +404,7 @@ func (p *Proxy) translateResponse(resp *http.Response) *http.Response {
 		if err != nil {
 			resp.Body = io.NopCloser(strings.NewReader(`{"error":{"message":"anthropic response read error","type":"proxy_error"}}`))
 			resp.StatusCode = http.StatusBadGateway
+			setBodyLen(resp, nil)
 			return resp
 		}
 		conv, err := ResponseAnthropicToOpenAI(b)
@@ -406,7 +414,7 @@ func (p *Proxy) translateResponse(resp *http.Response) *http.Response {
 		}
 		resp.Body = io.NopCloser(bytes.NewReader(conv))
 		resp.Header.Set("Content-Type", "application/json")
-		resp.ContentLength = int64(len(conv))
+		setBodyLen(resp, conv)
 		return resp
 	}
 
@@ -422,6 +430,58 @@ func (p *Proxy) translateResponse(resp *http.Response) *http.Response {
 	resp.Header.Del("Content-Length")
 	resp.ContentLength = -1
 	resp.TransferEncoding = []string{"chunked"}
+	return resp
+}
+
+// setBodyLen keeps the emitted Content-Length header in sync after the body was
+// replaced. streamBack copies resp.Header verbatim, so a stale length inherited
+// from the upstream body would make Go's server cut the translated response
+// short (or hang the client waiting for the missing bytes).
+func setBodyLen(resp *http.Response, body []byte) {
+	if body == nil {
+		resp.Header.Del("Content-Length")
+		resp.ContentLength = -1
+		return
+	}
+	resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
+	resp.ContentLength = int64(len(body))
+	resp.Header.Del("Transfer-Encoding")
+}
+
+// translateError passes an upstream error response through with its status code,
+// converting an Anthropic error body ({"type":"error","error":{...}}) into the
+// OpenAI error shape so OpenAI clients surface the real cause. Bodies that are
+// not Anthropic errors (gateways returning HTML/JSON of their own) are forwarded
+// unchanged -- hiding them would only make diagnosis harder.
+func (p *Proxy) translateError(resp *http.Response) *http.Response {
+	b, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		b = []byte(`{"type":"error","error":{"type":"api_error","message":"anthropic response read error"}}`)
+	}
+	var ae struct {
+		Type  string `json:"type"`
+		Error struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	out := b
+	if json.Unmarshal(b, &ae) == nil && ae.Type == "error" && ae.Error.Message != "" {
+		typ := ae.Error.Type
+		if typ == "" {
+			typ = "api_error"
+		}
+		if nb, merr := json.Marshal(map[string]any{
+			"error": map[string]any{"message": ae.Error.Message, "type": typ},
+		}); merr == nil {
+			out = nb
+		}
+		resp.Header.Set("Content-Type", "application/json")
+	}
+	// The original body is closed above; hand back the (possibly converted) bytes.
+	resp.Body = io.NopCloser(bytes.NewReader(out))
+	setBodyLen(resp, out)
 	return resp
 }
 
