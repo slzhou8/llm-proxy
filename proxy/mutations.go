@@ -37,13 +37,15 @@ func (p *Proxy) AddUpstream(u config.Upstream) error {
 // dashboard's enable/disable toggle sends only {name, enabled}, and a plain int
 // would silently reset the priority to 0.
 type UpstreamPatch struct {
-	Name         string            `json:"name"`
-	Protocol     config.Protocol   `json:"protocol"`
-	BaseURL      string            `json:"base_url"`
-	APIKey       string            `json:"api_key"`
-	ExtraHeaders map[string]string `json:"extra_headers"`
-	Priority     *int              `json:"priority"`
-	Enabled      *bool             `json:"enabled"`
+	Name              string            `json:"name"`
+	Protocol          config.Protocol   `json:"protocol"`
+	BaseURL           string            `json:"base_url"`
+	APIKey            string            `json:"api_key"`
+	ExtraHeaders      map[string]string `json:"extra_headers"`
+	UserAgent         string            `json:"user_agent"`
+	TranslateToOpenAI *bool             `json:"translate_to_openai"`
+	Priority          *int              `json:"priority"`
+	Enabled           *bool             `json:"enabled"`
 }
 
 // UpdateUpstream merges non-empty fields of u into the upstream with matching
@@ -67,6 +69,12 @@ func (p *Proxy) UpdateUpstream(u UpstreamPatch) error {
 			}
 			if u.ExtraHeaders != nil {
 				ex.ExtraHeaders = u.ExtraHeaders
+			}
+			// UserAgent is merged verbatim: the dashboard always sends the field,
+			// so an empty value intentionally clears any previously set UA.
+			ex.UserAgent = u.UserAgent
+			if u.TranslateToOpenAI != nil {
+				ex.TranslateToOpenAI = *u.TranslateToOpenAI
 			}
 			if u.Priority != nil {
 				ex.Priority = *u.Priority

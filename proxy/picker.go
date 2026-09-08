@@ -25,7 +25,16 @@ func (p *Proxy) snapshotGroup(proto config.Protocol) []config.Upstream {
 	p.mu.RLock()
 	enabled := make([]config.Upstream, 0, len(p.cfg.Upstreams))
 	for _, u := range p.cfg.Upstreams {
-		if u.Enabled && u.Protocol == proto {
+		if !u.Enabled {
+			continue
+		}
+		if u.Protocol == proto {
+			enabled = append(enabled, u)
+			continue
+		}
+		// An OpenAI-speaking client may also reach an Anthropic upstream that is
+		// configured to translate to OpenAI on both request and response.
+		if proto == config.ProtocolOpenAI && u.Protocol == config.ProtocolAnthropic && u.TranslateToOpenAI {
 			enabled = append(enabled, u)
 		}
 	}

@@ -1,0 +1,107 @@
+package proxy
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"llmproxy/config"
+	"llmproxy/stats"
+)
+
+// fakeAnthropic mirrors the parts of the Anthropic API the bridge touches.
+func fakeAnthropic(t *testing.T, stream bool) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("x-api-key") != "up-secret" {
+			t.Errorf("upstream did not receive its own key; got %q", r.Header.Get("x-api-key"))
+		}
+		if r.URL.Path != "/v1/messages" {
+			t.Errorf("bridge must rewrite path to /v1/messages, got %q", r.URL.Path)
+		}
+		if stream {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(200)
+			w.Write([]byte("event: message_start\n"))
+			w.Write([]byte(`data: {"type":"message_start","message":{"id":"msg_1","model":"claude-x","usage":{"input_tokens":1}}}` + "\n\n"))
+			w.Write([]byte("event: content_block_start\n"))
+			w.Write([]byte(`data: {"index":0,"content_block":{"type":"text"}}` + "\n\n"))
+			w.Write([]byte("event: content_block_delta\n"))
+			w.Write([]byte(`data: {"index":0,"delta":{"type":"text_delta","text":"hello "}}` + "\n\n"))
+			w.Write([]byte("event: content_block_delta\n"))
+			w.Write([]byte(`data: {"index":0,"delta":{"type":"text_delta","text":"anthropic"}}` + "\n\n"))
+			w.Write([]byte("event: message_delta\n"))
+			w.Write([]byte(`data: {"delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}` + "\n\n"))
+			w.Write([]byte("event: message_stop\n\n"))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		w.Write([]byte(`{"id":"msg_1","type":"message","role":"assistant","model":"claude-x","content":[{"type":"text","text":"hello from anthropic"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":2}}`))
+	}))
+}
+
+func bridgeProxy(t *testing.T, baseURL string) *Proxy {
+	store, err := stats.NewStore(filepath.Join(t.TempDir(), "stats.json"), 10)
+	if err != nil {
+		t.Fatalf("stats store: %v", err)
+	}
+	p := New(&config.Config{
+		Upstreams: []config.Upstream{{
+			Name: "bridge", Protocol: config.ProtocolAnthropic, BaseURL: baseURL,
+			APIKey: "up-secret", Enabled: true, TranslateToOpenAI: true,
+		}},
+		Failover: config.FailoverStrategy{Mode: "round_robin", MaxRotations: 1},
+	}, store)
+	return p
+}
+
+func TestBridgeEndToEndNonStream(t *testing.T) {
+	anth := fakeAnthropic(t, false)
+	defer anth.Close()
+	p := bridgeProxy(t, anth.URL)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"claude-x","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"object":"chat.completion"`) {
+		t.Errorf("response is not OpenAI-shaped: %s", body)
+	}
+	if !strings.Contains(body, "hello from anthropic") {
+		t.Errorf("text not carried through: %s", body)
+	}
+}
+
+func TestBridgeEndToEndStream(t *testing.T) {
+	anth := fakeAnthropic(t, true)
+	defer anth.Close()
+	p := bridgeProxy(t, anth.URL)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"claude-x","messages":[{"role":"user","content":"hi"}],"stream":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "data: [DONE]") {
+		t.Errorf("missing [DONE]:\n%s", body)
+	}
+	if !strings.Contains(body, "hello ") || !strings.Contains(body, "anthropic") {
+		t.Errorf("streamed text not carried through:\n%s", body)
+	}
+	if !strings.Contains(body, `"object":"chat.completion.chunk"`) {
+		t.Errorf("not OpenAI SSE:\n%s", body)
+	}
+}

@@ -20,8 +20,14 @@ type Upstream struct {
 	BaseURL      string            `json:"base_url"`                // e.g. https://api.openai.com / https://api.anthropic.com
 	APIKey       string            `json:"api_key"`                 // key sent as Authorization Bearer / x-api-key
 	ExtraHeaders map[string]string `json:"extra_headers,omitempty"` // optional per-upstream headers
-	Enabled      bool              `json:"enabled"`                 // skip disabled upstreams during failover
-	Priority     int               `json:"priority"`                // higher is tried first; equal values share load round-robin
+	UserAgent    string            `json:"user_agent,omitempty"`    // if set, overrides the inbound User-Agent sent upstream
+	// TranslateToOpenAI lets an OpenAI-speaking client reach an Anthropic
+	// upstream: the proxy translates the request OpenAI->Anthropic on the way
+	// out and the response Anthropic->OpenAI on the way back, for both
+	// streaming and non-streaming calls. Ignored unless Protocol is anthropic.
+	TranslateToOpenAI bool `json:"translate_to_openai,omitempty"`
+	Enabled           bool `json:"enabled"`  // skip disabled upstreams during failover
+	Priority          int  `json:"priority"` // higher is tried first; equal values share load round-robin
 }
 
 // RetryStrategy controls retry behaviour inside a single upstream.

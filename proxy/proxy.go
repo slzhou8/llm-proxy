@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"io"
@@ -152,7 +153,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if attempt > 1 {
 				attempts++
 			}
-			resp, err := p.sendOne(ctx, up, r, body, origAuth, origXAPIKey, attempt > 1)
+			resp, err := p.sendOne(ctx, up, r, body, origAuth, origXAPIKey, proto, attempt > 1)
 
 			if err != nil {
 				cls = classifyTransport(err)
@@ -302,11 +303,27 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	writeRaw(w, r, http.StatusBadGateway, nil)
 }
 
-// sendOne performs a single verbatim proxied request to one upstream, with the
-// upstream's auth in place. retrying is true on attempts >1 of the same
-// upstream, which lets us keep per-attempt handling uniform.
-func (p *Proxy) sendOne(ctx context.Context, up config.Upstream, r *http.Request, body []byte, origAuth, origXAPIKey string, retrying bool) (*http.Response, error) {
-	outReq, err := http.NewRequestWithContext(ctx, r.Method, joinURL(up.BaseURL, r.URL.RequestURI()), bytes.NewReader(body))
+// sendOne performs a single proxied request to one upstream, with the upstream's
+// auth in place. retrying is true on attempts >1 of the same upstream, which
+// lets us keep per-attempt handling uniform. clientProto is the protocol the
+// caller spoke; when it differs from the upstream's protocol and the upstream is
+// configured to bridge, the request/response are translated here.
+func (p *Proxy) sendOne(ctx context.Context, up config.Upstream, r *http.Request, body []byte, origAuth, origXAPIKey string, clientProto config.Protocol, retrying bool) (*http.Response, error) {
+	// An OpenAI-speaking caller reaching an Anthropic upstream with the bridge on
+	// requires translating both ways.
+	translate := up.Protocol == config.ProtocolAnthropic && up.TranslateToOpenAI && clientProto == config.ProtocolOpenAI
+
+	targetPath := r.URL.RequestURI()
+	if translate {
+		var err error
+		body, err = RequestOpenAIToAnthropic(body)
+		if err != nil {
+			return nil, err
+		}
+		targetPath = "/v1/messages"
+	}
+
+	outReq, err := http.NewRequestWithContext(ctx, r.Method, joinURL(up.BaseURL, targetPath), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -317,6 +334,13 @@ func (p *Proxy) sendOne(ctx context.Context, up config.Upstream, r *http.Request
 	outReq.Header.Del("X-LLMPROXY-Upstream")
 	// Strip any inbound proxy-delimited headers we must not leak.
 	stripHopHeaders(outReq.Header)
+	// The request body is either replayed from a buffer or rewritten (protocol
+	// translation), so any inbound length/encoding header is now stale. Drop them
+	// and let the transport recompute from outReq.Body; a leftover Content-Length
+	// would make the upstream block waiting for bytes that never arrive.
+	outReq.Header.Del("Content-Length")
+	outReq.Header.Del("Transfer-Encoding")
+	outReq.Header.Del("Content-Encoding")
 
 	// Apply upstream auth based on protocol.
 	switch up.Protocol {
@@ -332,19 +356,73 @@ func (p *Proxy) sendOne(ctx context.Context, up config.Upstream, r *http.Request
 		// to a third party. A gateway that wants Bearer instead can set it back
 		// via the upstream's extra_headers, which are merged below.
 		outReq.Header.Del("Authorization")
-		if v := r.Header.Get("anthropic-version"); v != "" {
-			// keep the client's version verbatim; the proxy adds nothing
+		// The Anthropic API requires an anthropic-version; an OpenAI client never
+		// sends one, so supply the default when we are bridging.
+		if translate && outReq.Header.Get("anthropic-version") == "" {
+			outReq.Header.Set("anthropic-version", defaultAnthropicVersion)
 		}
 	default: // openai
 		outReq.Header.Set("Authorization", "Bearer "+up.APIKey)
 	}
 
-	// Merge configured extra headers.
+	// Override the User-Agent only when the upstream asks for a specific one;
+	// otherwise the caller's original UA is forwarded untouched (feature default).
+	if up.UserAgent != "" {
+		outReq.Header.Set("User-Agent", up.UserAgent)
+	}
+
+	// Merge configured extra headers (last, so operators can add any header they
+	// need; auth headers above are intentionally not part of this set).
 	for k, v := range up.ExtraHeaders {
 		outReq.Header.Set(k, v)
 	}
 
-	return p.client.Do(outReq)
+	resp, err := p.client.Do(outReq)
+	if err != nil {
+		return nil, err
+	}
+	if translate {
+		resp = p.translateResponse(resp)
+	}
+	return resp, nil
+}
+
+// translateResponse rewrites an Anthropic upstream response into OpenAI form for
+// an OpenAI-speaking caller, preserving streaming where the upstream used it.
+func (p *Proxy) translateResponse(resp *http.Response) *http.Response {
+	isSSE := strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream")
+	if !isSSE {
+		b, err := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if err != nil {
+			resp.Body = io.NopCloser(strings.NewReader(`{"error":{"message":"anthropic response read error","type":"proxy_error"}}`))
+			resp.StatusCode = http.StatusBadGateway
+			return resp
+		}
+		conv, err := ResponseAnthropicToOpenAI(b)
+		if err != nil {
+			conv = []byte(`{"error":{"message":` + jsonEscape(err.Error()) + `,"type":"proxy_error"}}`)
+			resp.StatusCode = http.StatusBadGateway
+		}
+		resp.Body = io.NopCloser(bytes.NewReader(conv))
+		resp.Header.Set("Content-Type", "application/json")
+		resp.ContentLength = int64(len(conv))
+		return resp
+	}
+
+	// Streaming: wrap the Anthropic SSE body in a pull-based translator so the
+	// caller receives OpenAI SSE incrementally as it reads. No goroutine / pipe is
+	// involved, so there is no producer/consumer deadlock.
+	resp.Body = &anthropicSSETranslator{
+		src:          resp.Body,
+		br:           bufio.NewReader(resp.Body),
+		blockToolIdx: map[int]int{},
+	}
+	resp.Header.Set("Content-Type", "text/event-stream")
+	resp.Header.Del("Content-Length")
+	resp.ContentLength = -1
+	resp.TransferEncoding = []string{"chunked"}
+	return resp
 }
 
 // streamBack writes the upstream response verbatim to the client and streams the
@@ -482,8 +560,19 @@ func (p *Proxy) pinnedGroup(proto config.Protocol, name string) []config.Upstrea
 	p.mu.RLock()
 	var found *config.Upstream
 	for i := range p.cfg.Upstreams {
-		if u := p.cfg.Upstreams[i]; u.Enabled && u.Protocol == proto && u.Name == name {
-			found = &u
+		u := p.cfg.Upstreams[i]
+		if !u.Enabled || u.Name != name {
+			continue
+		}
+		if u.Protocol == proto {
+			f := u
+			found = &f
+			break
+		}
+		// Allow pinning a translate-enabled Anthropic upstream from an OpenAI test.
+		if proto == config.ProtocolOpenAI && u.Protocol == config.ProtocolAnthropic && u.TranslateToOpenAI {
+			f := u
+			found = &f
 			break
 		}
 	}

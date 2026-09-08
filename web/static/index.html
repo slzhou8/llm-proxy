@@ -1069,7 +1069,7 @@ tr.up-row-broken:hover{opacity:1;}
     <label>名称</label>
     <input id="u-name" placeholder="如 OpenAI 主 key">
     <div class="row" style="gap:12px;align-items:flex-start;">
-      <div style="flex:0 0 140px;"><label>协议</label><select id="u-protocol"><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option></select></div>
+      <div style="flex:0 0 140px;"><label>协议</label><select id="u-protocol" onchange="onProtoChange()"><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option></select></div>
       <div style="flex:1;"><label>Base URL</label><input id="u-base" placeholder="https://api.openai.com"></div>
     </div>
     <label>API Key</label>
@@ -1077,6 +1077,25 @@ tr.up-row-broken:hover{opacity:1;}
     <label>优先级</label>
     <input id="u-priority" type="number" value="0" placeholder="0">
     <div class="hint">数字越大越优先调用；相同优先级的上游轮询分摊流量。高优先级上游连续失败会被临时降级，恢复后自动回到原位。</div>
+    <label style="margin-top:6px;">客户端特征预设</label>
+    <select id="u-preset" onchange="applyPreset(this.value)">
+      <option value="">— 自定义 —</option>
+      <option value="claude-code">Claude Code CLI</option>
+      <option value="cline">Cline</option>
+      <option value="codex">Codex</option>
+    </select>
+    <label>User-Agent（留空 = 沿用客户端原始 UA）</label>
+    <input id="u-ua" placeholder="如 claude-code/1.0.0">
+    <label>自定义请求头</label>
+    <div id="u-headers"></div>
+    <button class="btn ghost sm" type="button" onclick="addHeaderRow('','')">＋ 添加请求头</button>
+    <div class="hint">这些头与 UA 会附加到转发给上游的请求上（鉴权头除外，不会被覆盖）。</div>
+    <div id="u-translate-wrap" style="display:none;margin-top:10px;">
+      <label style="display:flex;align-items:center;gap:8px;font-weight:500;cursor:pointer;">
+        <input type="checkbox" id="u-translate"> 输出转 OpenAI 格式（让 OpenAI SDK 调用此 Anthropic 上游）
+      </label>
+      <div class="hint">开启后，客户端用 OpenAI 格式请求，代理自动在 OpenAI↔Anthropic 之间双向转换（含流式）。</div>
+    </div>
     <p class="msg err" id="up-modal-msg"></p>
     <div class="row" style="margin-top:18px;justify-content:flex-end;">
       <button class="btn ghost" onclick="closeUpModal()">取消</button>
@@ -1528,9 +1547,14 @@ async function reloadConfig(){
       const rankCell=x.enabled
         ? `<span class="up-rank" title="在此协议组内的调用顺序">${rank}</span>`
         : `<span class="up-rank up-rank-off" title="已停用，不参与调用">—</span>`;
+      const tags=[];
+      if(x.translate_to_openai)tags.push(`<span class="tag" style="margin-left:6px;" title="开启 OpenAI↔Anthropic 双向转换">→OpenAI</span>`);
+      if(x.user_agent)tags.push(`<span class="tag" style="margin-left:6px;" title="自定义 UA：${esc(x.user_agent)}">UA</span>`);
+      const hn=Object.keys(x.extra_headers||{}).length;
+      if(hn)tags.push(`<span class="tag" style="margin-left:6px;" title="${hn} 个自定义请求头">Hdr×${hn}</span>`);
       html+=`<tr class="${open?'up-row-broken':''}">
     <td>${rankCell}</td>
-    <td style="font-weight:500;">${esc(x.name)}${open?`<span class="tag off" style="margin-left:6px;" title="连续失败 ${brk[x.name].fail_streak} 次，暂时降级 ${brk[x.name].open_for_sec}s 后重试">熔断 ${brk[x.name].open_for_sec}s</span>`:''}</td>
+    <td style="font-weight:500;">${esc(x.name)}${open?`<span class="tag off" style="margin-left:6px;" title="连续失败 ${brk[x.name].fail_streak} 次，暂时降级 ${brk[x.name].open_for_sec}s 后重试">熔断 ${brk[x.name].open_for_sec}s</span>`:''}${tags.join('')}</td>
     <td><span class="prio">${x.priority||0}</span></td>
     <td class="mono truncate" title="${esc(x.base_url)}">${esc(x.base_url)}</td>
     <td class="mono">${esc(x.api_key)}</td>
@@ -1592,25 +1616,74 @@ function healthCell(h){
 // --- upstream modal ---
 let lastUpstreamCount=1;
 const editCache={};
+// Preset client signatures: a User-Agent plus a small set of identifying headers.
+// Values are representative; verify against the real client if an upstream keys
+// behaviour off them. Auth headers are intentionally excluded.
+const CLIENT_PRESETS={
+  'claude-code':{ua:'claude-code/1.0.0',headers:{'anthropic-version':'2023-06-01'}},
+  'cline':{ua:'cline/2.0.0',headers:{'X-Client-Name':'cline'}},
+  'codex':{ua:'codex/1.0.0',headers:{'X-Client-Name':'codex'}}
+};
 function openUpModal(){
   $('up-modal-title').textContent='新增上游';
   ['u-name','u-base','u-key'].forEach(id=>$(id).value='');
   $('u-priority').value='0';
   $('u-protocol').value='openai';
+  $('u-preset').value='';
+  $('u-ua').value='';
+  $('u-headers').innerHTML='';
+  $('u-translate').checked=false;
   $('u-name').disabled=false;
   $('u-key').placeholder='sk-... 或完整 key';
   $('up-modal-msg').textContent='';
+  onProtoChange();
   $('up-modal').classList.remove('hidden');
 }
 function closeUpModal(){$('up-modal').classList.add('hidden');}
+function onProtoChange(){
+  const isAnth=$('u-protocol').value==='anthropic';
+  $('u-translate-wrap').style.display=isAnth?'block':'none';
+}
+function addHeaderRow(k,v){
+  const row=document.createElement('div');
+  row.className='hdr-row';
+  row.style.cssText='display:flex;gap:6px;margin-top:6px;';
+  row.innerHTML=`<input class="hdr-k" placeholder="Header" style="flex:1;" value="${k||''}"><input class="hdr-v" placeholder="值" style="flex:1;" value="${v||''}"><button class="btn ghost sm" type="button" onclick="this.parentNode.remove()">×</button>`;
+  $('u-headers').appendChild(row);
+}
+function collectHeaders(){
+  const out={};
+  document.querySelectorAll('#u-headers .hdr-row').forEach(r=>{
+    const k=r.querySelector('.hdr-k').value.trim();
+    const v=r.querySelector('.hdr-v').value;
+    if(k)out[k]=v;
+  });
+  return out;
+}
+function applyPreset(v){
+  const p=CLIENT_PRESETS[v];
+  if(!p)return;
+  $('u-ua').value=p.ua;
+  $('u-headers').innerHTML='';
+  for(const [k,val] of Object.entries(p.headers))addHeaderRow(k,val);
+}
 function editUp(name){
   const fill=x=>{
     $('up-modal-title').textContent='编辑上游';
     $('u-name').value=x.name;$('u-name').disabled=true; // name is the identity key
     $('u-protocol').value=x.protocol;$('u-base').value=x.base_url;$('u-key').value='';
     $('u-priority').value=x.priority||0;
+    $('u-ua').value=x.user_agent||'';
+    $('u-headers').innerHTML='';
+    const eh=x.extra_headers||{};
+    const keys=Object.keys(eh);
+    if(keys.length){keys.forEach(k=>addHeaderRow(k,eh[k]));}
+    else{addHeaderRow('','');}
+    $('u-translate').checked=!!x.translate_to_openai;
+    $('u-preset').value='';
     $('u-key').placeholder='留空则不修改（当前 '+x.api_key+'）';
     $('up-modal-msg').textContent='';
+    onProtoChange();
     $('up-modal').classList.remove('hidden');
   };
   const cached=editCache[name];
@@ -1618,7 +1691,8 @@ function editUp(name){
   j('/api/upstreams').then(list=>{const x=list.find(v=>v.name===name);editCache[name]=x;fill(x);});
 }
 async function addUpstream(){
-  const body={name:$('u-name').value.trim(),protocol:$('u-protocol').value,base_url:$('u-base').value.trim(),api_key:$('u-key').value.trim(),priority:+$('u-priority').value||0,enabled:true};
+  const body={name:$('u-name').value.trim(),protocol:$('u-protocol').value,base_url:$('u-base').value.trim(),api_key:$('u-key').value.trim(),priority:+$('u-priority').value||0,enabled:true,user_agent:$('u-ua').value.trim(),extra_headers:collectHeaders()};
+  if($('u-protocol').value==='anthropic')body.translate_to_openai=$('u-translate').checked;
   $('up-modal-msg').textContent='';
   if(!body.name||!body.base_url){$('up-modal-msg').textContent='名称和 Base URL 必填';return;}
   let res;
