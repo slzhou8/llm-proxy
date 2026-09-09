@@ -135,3 +135,37 @@ func TestBridgeErrorPassthrough(t *testing.T) {
 		t.Errorf("error must not be shaped as a success completion:\n%s", body)
 	}
 }
+
+// TestBridgeSkipsNonChatEndpoints checks that the OpenAI->Anthropic bridge only
+// engages for /v1/chat/completions. A GET /v1/models has no body to translate
+// and no Anthropic counterpart to rewrite the path to; translating it anyway
+// made the proxy fail the request with "openai request is not valid JSON:
+// unexpected end of JSON input" before it ever reached the upstream.
+func TestBridgeSkipsNonChatEndpoints(t *testing.T) {
+	var gotPath, gotKey string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotKey = r.URL.Path, r.Header.Get("x-api-key")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		w.Write([]byte(`{"object":"list","data":[{"id":"claude-x"}]}`))
+	}))
+	defer up.Close()
+	p := bridgeProxy(t, up.URL)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("status %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if gotPath != "/v1/models" {
+		t.Errorf("path must be forwarded untouched, got %q", gotPath)
+	}
+	if gotKey != "up-secret" {
+		t.Errorf("upstream did not receive its own key, got %q", gotKey)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, `"claude-x"`) {
+		t.Errorf("upstream body not passed through: %s", body)
+	}
+}

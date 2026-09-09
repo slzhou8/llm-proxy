@@ -311,8 +311,12 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // configured to bridge, the request/response are translated here.
 func (p *Proxy) sendOne(ctx context.Context, up config.Upstream, r *http.Request, body []byte, origAuth, origXAPIKey string, clientProto config.Protocol, retrying bool) (*http.Response, error) {
 	// An OpenAI-speaking caller reaching an Anthropic upstream with the bridge on
-	// requires translating both ways.
-	translate := up.Protocol == config.ProtocolAnthropic && up.TranslateToOpenAI && clientProto == config.ProtocolOpenAI
+	// requires translating both ways -- but only for the one endpoint that has
+	// an Anthropic equivalent. /v1/models, /v1/embeddings, etc. have no
+	// counterpart to rewrite the path to and no chat-shaped body to translate
+	// (a GET has no body at all), so they are forwarded to the upstream as-is.
+	translate := up.Protocol == config.ProtocolAnthropic && up.TranslateToOpenAI &&
+		clientProto == config.ProtocolOpenAI && routePath(r) == "/v1/chat/completions"
 
 	targetPath := r.URL.RequestURI()
 	if translate {
