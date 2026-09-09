@@ -671,6 +671,15 @@ func (p *Proxy) CurrentConfig() *config.Config {
 			c.Upstreams[i].ExtraHeaders = cp
 		}
 	}
+	// Same reasoning for the pricing table: the struct copy above aliases the
+	// live map, which UpdatePricing replaces wholesale under the lock.
+	if m := p.cfg.Pricing.Models; m != nil {
+		cp := make(map[string]config.ModelPrice, len(m))
+		for k, v := range m {
+			cp[k] = v
+		}
+		c.Pricing.Models = cp
+	}
 	return &c
 }
 

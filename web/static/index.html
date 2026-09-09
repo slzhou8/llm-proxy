@@ -239,9 +239,29 @@ tbody tr:last-child td{border-bottom:none;}
 /* ============ Overview dashboard ============ */
 .ov-updated{color:var(--dim);font-size:12px;}
 .ov-kpi{display:grid;grid-template-columns:repeat(4,1fr);gap:var(--sp-4);margin-bottom:var(--sp-5);}
+/* The cost KPI is conditional (estimation can be switched off), so the 5th
+   column is a modifier -- a fixed 5-column grid would leave a hole when it is
+   absent. */
+.ov-kpi.has-cost{grid-template-columns:repeat(5,1fr);}
 .ov-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:var(--sp-5);}
 .ov-grid .card{margin-bottom:0;}
+@media(max-width:1180px){.ov-kpi.has-cost{grid-template-columns:repeat(3,1fr);}}
 @media(max-width:920px){.ov-kpi{grid-template-columns:repeat(2,1fr);}.ov-grid{grid-template-columns:1fr;}}
+/* Cost panels. The "approx" marker is deliberately visible rather than a
+   tooltip: every figure here is an estimate from list prices, and a number that
+   looks exact invites being treated as a bill. */
+.cost-approx{font-size:11px;color:var(--dim);font-weight:500;}
+.cost-note{font-size:12px;color:var(--dim);line-height:1.7;margin:0 0 14px;}
+.cost-warn{color:var(--warn);}
+.cost-tbl td.num,.cost-tbl th.num{text-align:right;font-variant-numeric:tabular-nums;}
+.cost-money{font-variant-numeric:tabular-nums;font-weight:var(--fw-bold);}
+.cost-unpriced{color:var(--dim);}
+.cost-bar{height:6px;border-radius:3px;background:var(--border);overflow:hidden;margin-top:5px;}
+.cost-bar>i{display:block;height:100%;background:var(--chart-bar);}
+.pr-row{display:grid;grid-template-columns:1fr 110px 110px 36px;gap:8px;align-items:center;margin-bottom:6px;}
+.pr-row input{margin:0;}
+.pr-head{font-size:11.5px;color:var(--dim);font-weight:600;}
+@media(max-width:640px){.pr-row{grid-template-columns:1fr 80px 80px 32px;}}
 .ov-stat-sub{font-size:11.5px;color:var(--dim);margin-top:2px;font-variant-numeric:tabular-nums;}
 .ov-delta{font-size:11.5px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap;}
 .ov-delta.ov-muted,.ov-muted{color:var(--dim);font-weight:500;}
@@ -711,6 +731,11 @@ tr.up-row-broken:hover{opacity:1;}
       <div id="ov-trend"></div>
     </div>
 
+    <div class="card hidden" id="ov-cost-card">
+      <h2><span class="ico" data-icon="chart"></span>今日预估费用 <span class="cost-approx">按官方定价估算，非实际账单</span></h2>
+      <div id="ov-cost"></div>
+    </div>
+
     <div class="ov-grid">
       <div class="card">
         <h2><span class="ico" data-icon="activity"></span>上游健康</h2>
@@ -806,6 +831,39 @@ tr.up-row-broken:hover{opacity:1;}
         <button class="btn ghost" onclick="testAlert()" data-admin-only>发送测试告警</button>
       </div>
       <p class="msg" id="alert-msg"></p>
+    </div>
+    <div class="card">
+      <h2>费用估算定价</h2>
+      <p class="cost-note">
+        默认使用 Anthropic 官方公布的单价（美元 / 每百万 token，取自 platform.claude.com，2026-09-09）。
+        总览与统计报表里的金额都由这张表算出，仅供参考：它按上游返回的 token 数乘以这里的单价，
+        既不包含缓存读写与批量折扣，也不包含第三方网关自己加的价，因此通常<b>偏低于</b>真实账单。
+      </p>
+      <div class="row" style="gap:8px;margin-bottom:12px;">
+        <button class="chip" id="pricing-toggle" onclick="togglePricing()">未启用</button>
+      </div>
+      <div class="grid">
+        <div><label>货币符号 / 名称</label><input id="pr-currency" placeholder="USD"><div class="hint">仅作展示用，例如 USD、CNY、¥。</div></div>
+        <div><label>汇率（相对美元）</label><input id="pr-rate" type="number" min="0" step="0.0001" placeholder="1"><div class="hint">1 = 直接显示美元。按 CNY 展示可填 7.2 之类。</div></div>
+      </div>
+      <div class="fieldset" style="margin-top:14px;">
+        <div class="fs-head">按模型单价</div>
+        <div class="fs-desc">
+          模型名支持前缀匹配：填 <span class="mono">claude-sonnet-4-5</span> 就能同时覆盖
+          <span class="mono">claude-sonnet-4-5-20250929</span> 和 <span class="mono">-thinking</span> 变体。
+          留空的模型不参与估算，会在报表里单独标出，而不是按 0 计入总额。
+        </div>
+        <div class="pr-row pr-head"><span>模型名</span><span>输入 / 每百万</span><span>输出 / 每百万</span><span></span></div>
+        <div id="pr-models"></div>
+        <div class="row" style="margin-top:10px;">
+          <button class="btn ghost sm" onclick="addPriceRow()" data-admin-only>＋ 添加模型</button>
+          <button class="btn ghost sm" onclick="restoreDefaultPricing()" data-admin-only>恢复官方定价</button>
+        </div>
+      </div>
+      <div class="row" style="margin-top:16px;">
+        <button class="btn" onclick="savePricing()" data-admin-only>保存定价设置</button>
+      </div>
+      <p class="msg" id="pricing-msg"></p>
     </div>
   </section>
 
@@ -921,6 +979,17 @@ tr.up-row-broken:hover{opacity:1;}
       <h2 id="trend-title">请求次数趋势</h2>
       <div class="overflow"><div id="trend-chart"></div></div>
       <div id="chart-tip" class="chart-tip hidden"></div>
+    </div>
+    <div class="card hidden" id="stats-cost-card">
+      <h2>预估费用 <span class="cost-approx">按官方定价估算，非实际账单</span></h2>
+      <div id="stats-cost-note" class="cost-note"></div>
+      <div class="stat-grid" id="stats-cost-kpi"></div>
+      <div class="overflow" style="margin-top:16px;">
+      <table class="cost-tbl">
+        <thead><tr><th>模型</th><th class="num">调用</th><th class="num">输入tok</th><th class="num">输出tok</th><th class="num">单价(入/出 每百万)</th><th class="num">预估费用</th></tr></thead>
+        <tbody id="stats-cost-rows"></tbody>
+      </table>
+      </div>
     </div>
     <div class="card">
       <h2>按模型调用量排行</h2>
@@ -1579,6 +1648,7 @@ async function reloadConfig(){
   lastUpstreamCount=(u||[]).filter(x=>x.enabled).length||1;
   updatePolicyPreview();
   loadAlert();
+  loadPricing();
 }
 
 // --- status tokens (unified design system) ---
@@ -2516,6 +2586,12 @@ async function loadStats(from,to){
     const mrows=await j(`/api/stats/models?from=${from}&to=${to}`);
     renderModelRanking(mrows);
   } catch(e){ renderModelRanking(null); }
+  // Cost is fetched separately from the range payload above so a failure here
+  // (or an older build without the endpoint) hides just this card instead of
+  // blanking the whole report.
+  try {
+    renderStatsCost(await j(`/api/stats/cost?from=${from}&to=${to}`));
+  } catch(e){ renderStatsCost(null); }
   const dayArr=Object.keys(s.days||{}).map(d=>Object.assign({date:d},s.days[d]));
   const sortedDays=applySort(dayArr,'days');
   $('stats-days').innerHTML=sortedDays.length?sortedDays.map(v=>{return `<tr>
@@ -2768,14 +2844,24 @@ async function loadOverview(){
   const kpi=$('ov-kpi'); if(!kpi)return;
   $('ov-updated').textContent='加载中…';
   let ups=[],healthRes={},todayS={},yestS={},keys=[],calls=[];
+  const dToday=localDay(new Date()), dYest=localDay(daysAgo(1));
   try{
     [ups,healthRes,todayS,yestS,keys,calls]=await Promise.all([
       j('/api/upstreams'), j('/api/health?n=400'),
-      j(`/api/stats/range?from=${localDay(new Date())}&to=${localDay(new Date())}`),
-      j(`/api/stats/range?from=${localDay(daysAgo(1))}&to=${localDay(daysAgo(1))}`),
+      j(`/api/stats/range?from=${dToday}&to=${dToday}`),
+      j(`/api/stats/range?from=${dYest}&to=${dYest}`),
       j('/api/clientkeys'), j('/api/calls?n=50'),
     ]);
   }catch(e){ $('ov-updated').textContent='加载失败'; return; }
+  // Cost sits outside the Promise.all above so an unavailable endpoint costs
+  // this one card, not the entire overview.
+  let costToday=null,costYest=null;
+  try{
+    [costToday,costYest]=await Promise.all([
+      j(`/api/stats/cost?from=${dToday}&to=${dToday}`),
+      j(`/api/stats/cost?from=${dYest}&to=${dYest}`),
+    ]);
+  }catch(e){/* leave the cost card hidden */}
   const healthMap=(healthRes&&healthRes.upstreams)||{};
   const enabled=(ups||[]).filter(u=>u.enabled);
   const bad=[],warn=[],unknown={};
@@ -2793,10 +2879,21 @@ async function loadOverview(){
   const tTotal=tt.total||0, yTotal=yt.total||0;
   const tTok=tt.total_tokens||0, yTok=yt.total_tokens||0;
   const tRate=tTotal>0?tt.ok/tTotal*100:0, yRate=yTotal>0?yt.ok/yTotal*100:0;
+  // The cost KPI only appears when estimation is on and priced; has-cost widens
+  // the grid to match so a disabled panel does not leave an empty cell.
+  const showCost=!!(costToday&&costToday.enabled);
+  const costKPI=showCost
+    ? ovStat(fmtMoney((costToday.total||{}).cost,costToday.currency),'今日预估费用','var(--accent)',
+        // No unit label: the delta is a percentage change, so appending the
+        // currency would read as "12% USD".
+        ovDelta((costToday.total||{}).cost||0,((costYest||{}).total||{}).cost||0))
+    : '';
+  kpi.classList.toggle('has-cost',showCost);
   kpi.innerHTML=
     ovStat(fmtNum(tTotal),'今日调用','var(--accent)',ovDelta(tTotal,yTotal,'次'))+
     ovStat(tRate.toFixed(1)+'%','今日成功率',rateColor(tRate),ovDelta(tRate,yRate,null,'goodup'))+
     ovStat(fmtNum(tTok),'今日 Token','var(--accent)',ovDelta(tTok,yTok,'tok'))+
+    costKPI+
     ovStat(enabled.length?ringPct+'%':'—','上游健康度',overallColor,enabled.length?`${bad.length} 异常 / ${enabled.length} 启用`:'未配置上游');
 
   // health card
@@ -2842,6 +2939,9 @@ async function loadOverview(){
 
   // mini hourly trend (bars = call count, line = success rate)
   renderOverviewTrend(todayS);
+
+  // cost card (hidden when estimation is off or the endpoint is unavailable)
+  renderOverviewCost(costToday,costYest);
 
   $('ov-updated').textContent='更新于 '+new Date().toLocaleTimeString();
 }
@@ -2948,6 +3048,198 @@ function quotaBar(used,quota){
     <div class="quota-bar"><div class="quota-fill ${cls}" style="width:${pct}%"></div></div>
     <div class="quota-txt">${fmtNum(used)} / ${fmtNum(quota)}</div>
   </div>`;
+}
+
+// --- cost estimation ---
+// Every amount rendered here is an estimate: recorded token counts times the
+// configured list price. It is deliberately labelled as such everywhere it
+// appears, because the figure omits cache read/write rates, batch discounts and
+// any margin a third-party gateway adds, and so runs low against a real invoice.
+let costCache=null;
+
+// fmtMoney keeps small amounts legible instead of rounding them to 0.00: a
+// gateway proxying a few calls can easily land under a cent, and "0.00" reads
+// as "free" rather than "very cheap".
+function fmtMoney(v,cur){
+  v=Number(v)||0;
+  const sym=cur||'USD';
+  let s;
+  if(v===0)s='0';
+  else if(v<0.01)s=v.toFixed(4);
+  else if(v<1)s=v.toFixed(3);
+  else if(v<1000)s=v.toFixed(2);
+  else s=v.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g,',');
+  return `${s} ${sym}`;
+}
+
+// costNote spells out what the number does and does not include. This is shown
+// as body text rather than a tooltip on purpose -- the caveats change how the
+// figure should be read, so hiding them behind a hover would be misleading.
+function costNote(d){
+  const t=d.total||{};
+  const parts=[];
+  if(t.unpriced_models>0){
+    parts.push(`<span class="cost-warn">${t.unpriced_models} 个模型未配置单价</span>（${fmtNum(t.unpriced_tokens||0)} tok 未计入金额，可在「配置管理 → 费用估算定价」补充）`);
+  }
+  if(t.estimated_split){
+    parts.push('部分历史记录只存了总 token，输入/输出按当天整体比例拆分，金额为粗估');
+  }
+  if(t.unsplit_tokens>0){
+    parts.push(`${fmtNum(t.unsplit_tokens)} tok 无法拆分输入/输出，未计入金额`);
+  }
+  parts.push('未包含缓存读写、批量折扣与上游自身加价，通常偏低于真实账单');
+  return parts.map(p=>'· '+p).join('<br>');
+}
+
+// renderStatsCost fills the stats-page cost card. Priced models are ranked by
+// spend with a share bar; unpriced ones are still listed, marked, so a model
+// that is silently missing from the pricing table stays visible instead of
+// vanishing from the report.
+function renderStatsCost(d){
+  const card=$('stats-cost-card');
+  if(!card)return;
+  if(!d||!d.enabled){card.classList.add('hidden');return;}
+  card.classList.remove('hidden');
+  const cur=d.currency||'USD', t=d.total||{}, rows=d.models||[];
+  $('stats-cost-note').innerHTML=costNote(d);
+  const inTok=t.prompt_tokens||0, outTok=t.completion_tokens||0;
+  $('stats-cost-kpi').innerHTML=
+    `<div class="stat" style="--stat-c:var(--accent)"><b class="cost-money">${fmtMoney(t.cost,cur)}</b><span>预估总费用</span></div>`+
+    `<div class="stat"><b>${fmtNum(inTok)}</b><span>计费输入 token</span></div>`+
+    `<div class="stat"><b>${fmtNum(outTok)}</b><span>计费输出 token</span></div>`;
+  if(!rows.length){
+    $('stats-cost-rows').innerHTML='<tr><td colspan="6" style="color:var(--dim);text-align:center;padding:24px;">该范围暂无可估算的调用</td></tr>';
+    return;
+  }
+  const maxCost=Math.max(...rows.map(r=>r.cost||0),0.0000001);
+  $('stats-cost-rows').innerHTML=rows.map(r=>{
+    if(!r.priced){
+      return `<tr class="cost-unpriced">
+        <td>${esc(r.model)}<div class="hint">未配置单价</div></td>
+        <td class="num">${fmtNum(r.total)}</td>
+        <td class="num">${fmtNum(r.prompt_tokens)}</td>
+        <td class="num">${fmtNum(r.completion_tokens)}</td>
+        <td class="num">—</td>
+        <td class="num">未计入</td></tr>`;
+    }
+    const pct=Math.max(2,Math.round((r.cost||0)/maxCost*100));
+    const approx=r.estimated_split?' <span class="cost-approx">拆分为估算</span>':'';
+    return `<tr>
+      <td>${esc(r.model)}${approx}<div class="cost-bar"><i style="width:${pct}%"></i></div></td>
+      <td class="num">${fmtNum(r.total)}</td>
+      <td class="num">${fmtNum(r.prompt_tokens)}</td>
+      <td class="num">${fmtNum(r.completion_tokens)}</td>
+      <td class="num mono">${r.input_rate} / ${r.output_rate}</td>
+      <td class="num cost-money">${fmtMoney(r.cost,cur)}</td></tr>`;
+  }).join('');
+}
+
+// renderOverviewCost shows today's spend plus the top models, with yesterday as
+// the comparison so a cost spike is visible without opening the stats page.
+function renderOverviewCost(today,yest){
+  const card=$('ov-cost-card');
+  if(!card)return;
+  if(!today||!today.enabled){card.classList.add('hidden');return;}
+  card.classList.remove('hidden');
+  const cur=today.currency||'USD';
+  const t=today.total||{}, y=(yest&&yest.total)||{};
+  const rows=(today.models||[]).filter(r=>r.priced&&r.cost>0).slice(0,5);
+  const list=rows.length
+    ? rows.map(r=>`<div class="ov-usage-row"><span>${esc(r.model)}</span><b class="cost-money">${fmtMoney(r.cost,cur)}</b><span class="ov-delta ov-muted">${fmtNum(r.total_tokens)} tok</span></div>`).join('')
+    : '<div class="ov-empty">今日暂无可估算费用的调用</div>';
+  $('ov-cost').innerHTML=
+    `<div class="ov-usage-row"><span>今日预估</span><b class="cost-money">${fmtMoney(t.cost,cur)}</b>${ovDelta(t.cost||0,y.cost||0)}</div>`+
+    list+
+    `<div class="cost-note" style="margin:12px 0 0;">${costNote(today)}</div>`;
+}
+
+// --- pricing settings ---
+let pricingEnabled=true;
+function renderPricingToggle(){
+  const btn=$('pricing-toggle');
+  if(!btn)return;
+  btn.textContent=pricingEnabled?'已启用':'未启用';
+  btn.classList.toggle('on',pricingEnabled);
+}
+function togglePricing(){
+  pricingEnabled=!pricingEnabled;
+  renderPricingToggle();
+}
+
+// priceRow renders one editable model/rate line. Rows are plain DOM inputs
+// rather than a bound model so an admin can retype a name without the row
+// being re-keyed and losing focus mid-edit.
+function priceRow(name,input,output){
+  const div=document.createElement('div');
+  div.className='pr-row';
+  div.innerHTML=
+    `<input class="pr-name" placeholder="claude-opus-5" value="${esc(name||'')}">`+
+    `<input class="pr-in" type="number" min="0" step="0.01" placeholder="5" value="${input===undefined?'':input}">`+
+    `<input class="pr-out" type="number" min="0" step="0.01" placeholder="25" value="${output===undefined?'':output}">`+
+    `<button class="btn ghost sm" title="删除该行" onclick="this.parentNode.remove()">✕</button>`;
+  return div;
+}
+function addPriceRow(){
+  $('pr-models').appendChild(priceRow('','',''));
+}
+function renderPriceRows(models){
+  const host=$('pr-models');
+  if(!host)return;
+  host.innerHTML='';
+  const names=Object.keys(models||{}).sort();
+  if(!names.length){host.appendChild(priceRow('','',''));return;}
+  names.forEach(n=>host.appendChild(priceRow(n,models[n].input,models[n].output)));
+  // Viewers get the same table read-only; the save button is already hidden by
+  // the data-admin-only pass, so disable the inputs to match.
+  if(!isAdmin())host.querySelectorAll('input,button').forEach(el=>{el.disabled=true;});
+}
+async function loadPricing(){
+  try{
+    const p=await j('/api/pricing');
+    pricingEnabled=!!p.enabled;
+    $('pr-currency').value=p.currency||'USD';
+    $('pr-rate').value=p.rate||1;
+    renderPriceRows(p.models);
+    renderPricingToggle();
+  }catch(e){/* older build without the endpoint */}
+}
+async function restoreDefaultPricing(){
+  confirmDialog('恢复官方定价','将把下方单价表替换为 Anthropic 官方公布的默认价格，你自定义的条目会被覆盖。保存后才会生效。','恢复默认',async()=>{
+    try{
+      const d=await j('/api/pricing/defaults');
+      $('pr-currency').value=d.currency||'USD';
+      $('pr-rate').value=d.rate||1;
+      renderPriceRows(d.models);
+      toast('已载入官方定价，记得点保存','ok');
+    }catch(e){toast('载入默认定价失败','err');}
+  });
+}
+async function savePricing(){
+  const models={};
+  let bad='';
+  $('pr-models').querySelectorAll('.pr-row').forEach(row=>{
+    const name=row.querySelector('.pr-name').value.trim();
+    const inV=row.querySelector('.pr-in').value.trim();
+    const outV=row.querySelector('.pr-out').value.trim();
+    if(!name&&!inV&&!outV)return; // untouched blank row
+    if(!name){bad=bad||'有一行填了单价但没填模型名';return;}
+    const i=Number(inV), o=Number(outV);
+    if(!isFinite(i)||!isFinite(o)||i<0||o<0){bad=bad||`模型 ${name} 的单价必须是非负数字`;return;}
+    models[name]={input:i,output:o};
+  });
+  if(bad){toast(bad,'err');return;}
+  const body={
+    enabled:pricingEnabled,
+    currency:$('pr-currency').value.trim()||'USD',
+    rate:Number($('pr-rate').value)||1,
+    models:models,
+  };
+  const res=await j('/api/pricing',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(res&&res.error){toast(res.error,'err');return;}
+  toast(pricingEnabled?'定价已保存':'费用估算已关闭','ok');
+  costCache=null;
+  if(currentTab==='stats')refreshStats();
+  if(currentTab==='overview')loadOverview();
 }
 
 // entry

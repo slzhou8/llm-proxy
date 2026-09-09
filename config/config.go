@@ -110,7 +110,8 @@ type Config struct {
 	Users      []User           `json:"users"`      // dashboard accounts with roles
 	Retry      RetryStrategy    `json:"retry"`
 	Failover   FailoverStrategy `json:"failover"`
-	Alert      AlertConfig      `json:"alert"` // webhook alerting
+	Alert      AlertConfig      `json:"alert"`   // webhook alerting
+	Pricing    PricingConfig    `json:"pricing"` // per-model rates for cost estimation
 	Upstreams  []Upstream       `json:"upstreams"`
 	ClientKeys []ClientKey      `json:"client_keys"` // credentials for apps calling the proxy
 }
@@ -169,6 +170,7 @@ func Load(path string) (*Config, error) {
 	data, err := readFile(path)
 	if err != nil {
 		cfg := Default()
+		cfg.Pricing = DefaultPricing()
 		if werr := writeFile(path, cfg); werr != nil {
 			return nil, werr
 		}
@@ -177,6 +179,22 @@ func Load(path string) (*Config, error) {
 	cfg := Default() // start from defaults then overlay
 	if err := json.Unmarshal(data, cfg); err != nil {
 		return nil, err
+	}
+	// Pricing is fixed up after the overlay instead of being seeded in
+	// Default(): json.Unmarshal merges into an existing map rather than
+	// replacing it, so a pre-seeded table would resurrect models the user
+	// deleted in the dashboard. Whether the block was present at all cannot be
+	// recovered from the struct (an absent block and an all-zero one are
+	// identical once unmarshalled), so probe the raw JSON -- absent means never
+	// configured and takes the full defaults, present is the user's own setting
+	// with only missing sub-fields filled in.
+	var probe struct {
+		Pricing *json.RawMessage `json:"pricing"`
+	}
+	if json.Unmarshal(data, &probe) == nil && probe.Pricing == nil {
+		cfg.Pricing = DefaultPricing()
+	} else {
+		cfg.Pricing.EnsureDefaults()
 	}
 	return cfg, nil
 }

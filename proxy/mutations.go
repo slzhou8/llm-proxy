@@ -125,6 +125,33 @@ func (p *Proxy) UpdateAlert(alert config.AlertConfig) error {
 	return p.saveLocked()
 }
 
+// UpdatePricing replaces the cost-estimation pricing table. Like UpdateAlert it
+// swaps the whole struct rather than merging: an empty Models map means "price
+// nothing" and a false Enabled means "hide the cost panels", neither of which
+// can be told apart from "field not supplied" if we merged field by field.
+//
+// Missing sub-fields (currency, rate) are filled with their defaults so a
+// caller that omits them cannot land a table that silently prices everything at
+// zero.
+func (p *Proxy) UpdatePricing(pricing config.PricingConfig) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if pricing.Models == nil {
+		// Distinguish "cleared the table" from "omitted the field": an explicit
+		// empty map arrives non-nil, so nil here means the caller sent no table
+		// and the existing one is kept.
+		pricing.Models = p.cfg.Pricing.Models
+	}
+	if pricing.Currency == "" {
+		pricing.Currency = "USD"
+	}
+	if pricing.Rate <= 0 {
+		pricing.Rate = 1
+	}
+	p.cfg.Pricing = pricing
+	return p.saveLocked()
+}
+
 // saveLocked writes the in-memory config to disk. Caller must hold p.mu.
 func (p *Proxy) saveLocked() error {
 	if p.cfgPath == "" {

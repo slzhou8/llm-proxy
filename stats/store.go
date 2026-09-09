@@ -70,10 +70,17 @@ type DayAgg struct {
 // upstream actually served, which may differ from the requested one when the
 // client asked for "auto" or a router alias).
 type ModelAgg struct {
-	Total       int64 `json:"total"`
-	OK          int64 `json:"ok"`
-	Failed      int64 `json:"failed"`
-	TotalTokens int64 `json:"total_tokens"`
+	Total  int64 `json:"total"`
+	OK     int64 `json:"ok"`
+	Failed int64 `json:"failed"`
+	// Input and output tokens are tracked separately because they are priced
+	// separately (output costs 5x input on most models), so a cost estimate
+	// cannot be derived from TotalTokens alone. Snapshots persisted before
+	// these fields existed carry TotalTokens with both splits at zero; the cost
+	// endpoint apportions those rather than pricing them as free.
+	PromptTokens     int64 `json:"prompt_tokens"`
+	CompletionTokens int64 `json:"completion_tokens"`
+	TotalTokens      int64 `json:"total_tokens"`
 }
 
 // Store is concurrency-safe. It keeps a bounded recent-call buffer purely in
@@ -170,6 +177,8 @@ func (s *Store) RecordCall(c Call) {
 		} else {
 			m.Failed++
 		}
+		m.PromptTokens += int64(c.PromptTokens)
+		m.CompletionTokens += int64(c.CompletionTokens)
 		m.TotalTokens += int64(c.TotalTokens)
 	}
 }
@@ -203,7 +212,8 @@ func (s *Store) Snapshot() map[string]*DayAgg {
 		if v.ByModel != nil {
 			c.ByModel = make(map[string]*ModelAgg, len(v.ByModel))
 			for kk, n := range v.ByModel {
-				c.ByModel[kk] = &ModelAgg{Total: n.Total, OK: n.OK, Failed: n.Failed, TotalTokens: n.TotalTokens}
+				mm := *n // copy every field: a per-field copy silently drops new ones
+				c.ByModel[kk] = &mm
 			}
 		}
 		out[k] = &c
@@ -240,7 +250,8 @@ func (s *Store) Range(from, to string) RangeResult {
 		if v.ByModel != nil {
 			c.ByModel = make(map[string]*ModelAgg, len(v.ByModel))
 			for k, n := range v.ByModel {
-				c.ByModel[k] = &ModelAgg{Total: n.Total, OK: n.OK, Failed: n.Failed, TotalTokens: n.TotalTokens}
+				mm := *n // copy every field: a per-field copy silently drops new ones
+				c.ByModel[k] = &mm
 			}
 		}
 		res.Days[day] = &c
@@ -372,6 +383,8 @@ func (s *Store) load() {
 			} else {
 				m.Failed++
 			}
+			m.PromptTokens += int64(c.PromptTokens)
+			m.CompletionTokens += int64(c.CompletionTokens)
 			m.TotalTokens += int64(c.TotalTokens)
 		}
 	}

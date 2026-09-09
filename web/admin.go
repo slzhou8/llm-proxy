@@ -47,6 +47,11 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/stats", s.requireAuth(s.apiStats))
 	mux.HandleFunc("/api/stats/range", s.requireAuth(s.apiStatsRange))
 	mux.HandleFunc("/api/stats/models", s.requireAuth(s.apiStatsModels))
+	mux.HandleFunc("/api/stats/cost", s.requireAuth(s.apiStatsCost))
+	// Pricing rates are not secrets, so viewers may read them; the PUT handler
+	// gates writes on the admin role itself.
+	mux.HandleFunc("/api/pricing", s.requireAuth(s.apiPricing))
+	mux.HandleFunc("/api/pricing/defaults", s.requireAuth(s.apiPricingDefaults))
 	mux.HandleFunc("/api/health", s.requireAuth(s.apiHealth))
 	// /healthz is unauthenticated: it returns only {ok:true} so probes, load
 	// balancers, and monitoring services can confirm the process is alive without
@@ -574,4 +579,173 @@ func cors(h http.Handler) http.Handler {
 		}
 		h.ServeHTTP(w, r)
 	})
+}
+
+// CostRow is the estimated spend for one model over the queried range.
+type CostRow struct {
+	Model            string  `json:"model"`
+	Total            int64   `json:"total"`             // calls
+	PromptTokens     int64   `json:"prompt_tokens"`     // input tokens priced
+	CompletionTokens int64   `json:"completion_tokens"` // output tokens priced
+	TotalTokens      int64   `json:"total_tokens"`
+	Cost             float64 `json:"cost"`                      // in the configured display currency
+	Priced           bool    `json:"priced"`                    // false when no rate matched this model
+	InputRate        float64 `json:"input_rate,omitempty"`      // USD/1M, for showing which rate was applied
+	OutputRate       float64 `json:"output_rate,omitempty"`     // USD/1M
+	EstimatedSplit   bool    `json:"estimated_split,omitempty"` // in/out split was apportioned, not recorded
+}
+
+// CostTotal is the range-wide roll-up. Cost sums only the priced rows, and the
+// unpriced counters exist so the dashboard can say the total is partial instead
+// of presenting it as complete.
+type CostTotal struct {
+	Cost             float64 `json:"cost"`
+	PromptTokens     int64   `json:"prompt_tokens"`
+	CompletionTokens int64   `json:"completion_tokens"`
+	TotalTokens      int64   `json:"total_tokens"`
+	PricedModels     int     `json:"priced_models"`
+	UnpricedModels   int     `json:"unpriced_models"`
+	UnpricedTokens   int64   `json:"unpriced_tokens"` // tokens on models with no rate
+	UnsplitTokens    int64   `json:"unsplit_tokens"`  // tokens that could be neither split nor apportioned
+	EstimatedSplit   bool    `json:"estimated_split"` // any row's split was apportioned
+}
+
+// apiStatsCost estimates spend per model for [from,to] inclusive by applying the
+// configured pricing table to recorded token counts.
+//
+// Two honesty details shape the response. Models with no matching rate are
+// reported with priced=false and their tokens counted in UnpricedTokens rather
+// than silently costing zero -- a third-party gateway commonly serves models
+// that are not in the table at all. And per-model roll-ups persisted before the
+// input/output split was tracked carry only a total: those are apportioned using
+// the same day's overall input:output ratio and flagged EstimatedSplit, because
+// pricing them as if they were all input (or all output) would be wrong by the
+// 5x spread between the two rates.
+func (s *Server) apiStatsCost(w http.ResponseWriter, r *http.Request) {
+	from := r.URL.Query().Get("from")
+	to := r.URL.Query().Get("to")
+	if from == "" || to == "" {
+		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": "from and to required (YYYY-MM-DD)"})
+		return
+	}
+	pricing := s.proxy.CurrentConfig().Pricing
+	res := s.store.Range(from, to)
+
+	agg := map[string]*CostRow{}
+	var unsplit int64
+	for _, d := range res.Days {
+		for name, m := range d.ByModel {
+			in, out := m.PromptTokens, m.CompletionTokens
+			estimated := false
+			if in == 0 && out == 0 && m.TotalTokens > 0 {
+				// Legacy snapshot: apportion by this day's overall ratio, which
+				// was recorded even when the per-model split was not.
+				dp, dc := d.PromptTokens, d.CompletionTokens
+				if dp+dc > 0 {
+					in = m.TotalTokens * dp / (dp + dc)
+					out = m.TotalTokens - in
+					estimated = true
+				} else {
+					// No ratio to apportion with. Leave it out of the cost
+					// rather than inventing a split.
+					unsplit += m.TotalTokens
+				}
+			}
+			a := agg[name]
+			if a == nil {
+				a = &CostRow{Model: name}
+				agg[name] = a
+			}
+			a.Total += m.Total
+			a.PromptTokens += in
+			a.CompletionTokens += out
+			a.TotalTokens += m.TotalTokens
+			if estimated {
+				a.EstimatedSplit = true
+			}
+		}
+	}
+
+	var tot CostTotal
+	tot.UnsplitTokens = unsplit
+	rows := make([]CostRow, 0, len(agg))
+	for _, a := range agg {
+		if mp, ok := pricing.Lookup(a.Model); ok {
+			a.Priced = true
+			a.InputRate, a.OutputRate = mp.Input, mp.Output
+			a.Cost, _ = pricing.Cost(a.Model, a.PromptTokens, a.CompletionTokens)
+			tot.Cost += a.Cost
+			tot.PromptTokens += a.PromptTokens
+			tot.CompletionTokens += a.CompletionTokens
+			tot.PricedModels++
+		} else {
+			tot.UnpricedModels++
+			tot.UnpricedTokens += a.TotalTokens
+		}
+		tot.TotalTokens += a.TotalTokens
+		if a.EstimatedSplit {
+			tot.EstimatedSplit = true
+		}
+		rows = append(rows, *a)
+	}
+	// Priced rows first, then by cost, so the spend ranking reads top-down and
+	// unpriced models collect at the bottom instead of interleaving at zero.
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Priced != rows[j].Priced {
+			return rows[i].Priced
+		}
+		if rows[i].Cost != rows[j].Cost {
+			return rows[i].Cost > rows[j].Cost
+		}
+		return rows[i].TotalTokens > rows[j].TotalTokens
+	})
+
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"enabled":  pricing.Enabled,
+		"currency": pricing.DisplayCurrency(),
+		"rate":     pricing.Rate,
+		"total":    tot,
+		"models":   rows,
+	})
+}
+
+// apiPricing reads (GET) or replaces (PUT) the cost-estimation pricing table.
+func (s *Server) apiPricing(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.writeJSON(w, http.StatusOK, s.proxy.CurrentConfig().Pricing)
+	case http.MethodPut:
+		if c := userFrom(r); c == nil || c.Role != config.RoleAdmin {
+			s.writeJSON(w, http.StatusForbidden, map[string]string{"error": "只读账号无权执行此操作"})
+			return
+		}
+		var in config.PricingConfig
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		for name, mp := range in.Models {
+			if mp.Input < 0 || mp.Output < 0 {
+				s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": "模型 " + name + " 的单价不能为负数"})
+				return
+			}
+		}
+		if err := s.proxy.UpdatePricing(in); err != nil {
+			s.writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		s.writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+// apiPricingDefaults returns the built-in official price table so the dashboard
+// can offer a "restore defaults" action without hardcoding rates in the UI.
+func (s *Server) apiPricingDefaults(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, config.DefaultPricing())
 }
